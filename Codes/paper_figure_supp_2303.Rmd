@@ -1,0 +1,2158 @@
+---
+title: "generate supp figures for the paper"
+author: "Yunwei Zhang"
+date: “`r paste0('Initiated on 20230418, compiled on ', format(Sys.time(), '%Y %b %d'))`”
+output:
+  
+  html_document:
+    code_folding: hide
+    fig_height: 8
+    fig_width: 12
+    highlight: tango
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,message = FALSE)
+#usethis::edit_r_environ()
+#R_MAX_VSIZE=700Gb
+```
+
+
+```{r}
+#library(GEOquery)  ## go to https://github.com/seandavi/GEOquery for installation details
+#library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(MultiAssayExperiment)
+library(S4Vectors)
+library(SummarizedExperiment)
+library(DT)
+library(randomForest)
+library(e1071)
+library("bnstruct")
+library(rminer)
+library(ggpubr)
+setwd("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis")
+# install.packages("VANData_1.0.0.tgz", repos=NULL,type="source")
+# install.packages("VAN_1.0.0.tgz", repos=NULL,type="source") 
+
+library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+library(DMwR)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(gage)
+library(knitr)
+library(DT)
+library(janitor)
+library(KEGGREST)
+library(MASS)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(dplyr)
+library(reshape)
+library(ggplot2)
+library(plyr)
+library(gtable)
+library(grid)
+library(pheatmap)
+library(reshape2)
+library(plotly)
+library(UpSetR)
+library(MatchIt)
+require(pathview)
+library(STRINGdb)
+## Kegg sets data
+require(gage)
+require(gageData)
+library(clusterProfiler)
+library(enrichplot)
+kegg = kegg.gsets(species = "hsa", id.type = "kegg")
+kegg.sets.hsa = kegg$kg.sets
+library(ggrepel)
+```
+
+* this file is to get supp figures for the paper:
+
+* using the v5 data object with updated sample info 
+
+* supp figure S2: same as figure2 but use DCM instead, notice the change of donors here: using the designed donors for dcm comparison due to: DCM-DM is a much rarer heart sample. It's a genetic disease without ischemia but also with diabetes
+because of that we have few patients and a couple of them are young; 22 and 31 I think.
+To account for those younger ages, some younger Donor samples were added to the 47yo+ donor group.
+
+* supp figure S3: same as figure2 but use both IHD and DCM to compare with donors: need to check those donors with Ben in email
+
+* supp figure S1: some MDS plots with all five groups (ihd-dm, ihd-no dm, dcm-dm, dcm-no dm, donors) and upset plots for those 4 comparisons above (ihd-dm, ihd-no dm, dcm-dm, dcm-no dm compare to corresponding donors in those above analysis), notice those are for multi-omics
+
+* supp figure S4: check the layout picture Ben sent, but mainly compare male and female donors
+
+
+# S2 {.tabset .tabset-fade .tabset-pills}
+
+* with those 4 young donors for both analysis for S2.
+
+## DCM-DM VS Donor
+```{r}
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+infodt1 = colData(all_omics)
+infodt1$Age=as.numeric(infodt1$Age)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=protein_expression2[,union(grep("_DCM_Yes",colnames(protein_expression2)),grep("Donor_No",colnames(protein_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+        #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+# g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+#       geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+#       xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-DM vs Donor") +
+#       theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+# panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+#       geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+# 
+# datatable(df1)
+# #ggsave(filename="plot1.pdf",g1)
+#write.csv(df1,file="dcm_dm vs donor protein.csv")
+g1=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2.5|-logFC>2.5|neglogP_value>6)))
+
+
+set1=df1[which(df1$P.Value<0.05),"name"]
+set1_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set1_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+# #pathway analysis
+# set.seed(202204)
+# experiment_data_imputation=knn.impute(t(as.matrix(experiment_data_noimputation)),3)
+# experiment_data_pathway=as.data.frame(t(experiment_data_imputation))
+# dim(experiment_data_pathway)
+#     
+# ##With voom for finding pathways
+# groupname<-as.factor(experiment_data_noimputation1$y)
+# design <- model.matrix(~ groupname + 0)
+# log2.cpm <- voom(experiment_data_pathway, design, normalize.method = "quantile")
+# fit <- lmFit(log2.cpm, design)
+# cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+# fit2 <- contrasts.fit(fit, cont.matrix)
+# fit2 <- eBayes(fit2)
+# limma.res=topTable(fit2,n=Inf,sort="p", adjust.method = "fdr")
+# fc_new <- limma.res$logFC
+# limma.res$entrez = mapIds(org.Hs.eg.db,
+#                      keys=row.names(limma.res), 
+#                      column="ENTREZID",
+#                      keytype=keytypes(org.Hs.eg.db)[2],
+#                      multiVals="first")
+# names(fc_new) <- limma.res$entrez
+# 
+# kegg_gene_list<-na.omit(fc_new)
+# kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+# kk2 <- gseKEGG(geneList     = kegg_gene_list,
+#                organism     = "hsa",
+#                nPerm        = 10000,
+#                minGSSize    = 3,
+#                maxGSSize    = 800,
+#                pvalueCutoff = 0.05,
+#                pAdjustMethod = "BH",
+#                keyType       = "ncbi-geneid")
+# datatable(as.data.frame(kk2))
+# clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+load("all_omics_lv_v6.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=metabolite_expression1[,union(grep("_DCM_Yes",colnames(metabolite_expression1)),grep("Donor_No",colnames(metabolite_expression1)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+  g2=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.5|-logFC>0.5|neglogP_value>2)))
+ 
+  datatable(df1)
+  #write.csv(df1,file="dcm_dm vs donor metabolite.csv")
+  set2=df1[which(df1$P.Value<0.05),"name"]
+  set2_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+  set2_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+  
+  
+#       #pathway analysis: name mapping to change the metabolites names
+# nameref=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/BH 2020 scMerge_impute AMIDE and HILIC 14.12.21_Normalised.xlsx",sheet = 4)
+# sum(rownames(df1) %in% nameref$Metabolite)
+# 
+# df1_new=df1[which(rownames(df1) %in% nameref$Metabolite),]
+# df1_new$name=rownames(df1_new)
+# df1_new$name[as.numeric(na.omit(match(nameref$Metabolite,df1_new$name,nomatch = NA)))] <- nameref$`KEGG ID`[as.numeric(na.omit(match(df1_new$name,nameref$Metabolite,nomatch = NA)))]
+# dim(df1_new)
+# df2=df1_new[!is.na(df1_new$name),] #not matching are noted as "-" so that i didnt delete anything
+# dim(df2)
+# fc=df2$logFC
+# names(fc)=df2$name
+# fc=sort(fc,decreasing = TRUE)
+# 
+# #name mapping for pathways
+# meta_pathway_name=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/2020 Human Heart Metabolomic functionally annotated metabolites.xlsx")
+# meta_pathway_name=meta_pathway_name[,c("KEGG pathway","KEGG")]
+# sum(meta_pathway_name$KEGG%in% names(fc))
+# 
+# library(clusterProfiler)
+# kk<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "BH")
+# datatable(as.data.frame(kk))
+# clusterProfiler::dotplot(kk, showCategory=10, split=".sign") + facet_grid(.~.sign)
+# kk2<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "none")
+# datatable(as.data.frame(kk2))
+# clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+# #pAdjustMethod one of “holm”, “hochberg”, “hommel”, “bonferroni”, “BH”, “BY”, “fdr”, “none”
+# kk3<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "fdr")
+# datatable(as.data.frame(kk3))
+# clusterProfiler::dotplot(kk3, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+load("all_omics_lv_v6.RData")
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+#changed 20220224: no overall filtering
+lipid_expression2=lipid_expression1
+dim(lipid_expression2)
+dim(lipid_expression2[which(rowMeans(!is.na(lipid_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+lipid_expression2=lipid_expression2[,colnames(lipid_expression2)%in%indexx]
+dim(lipid_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=lipid_expression2[,union(grep("_DCM_Yes",colnames(lipid_expression2)),grep("Donor_No",colnames(lipid_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g3=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>1|-logFC>2.5|neglogP_value>1.8)))
+datatable(df1)
+#write.csv(df1,file="dcm_dm vs donor lipid 2304.csv")
+set3=df1[which(df1$P.Value<0.05),"name"]
+set3_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set3_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+#ggsave(filename="dcm_dm vs donor lipid2303.pdf",g3)
+```
+
+
+## DCM-no DM VS Donor
+
+```{r}
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=protein_expression2[,union(grep("_DCM_No",colnames(protein_expression2)),grep("Donor_No",colnames(protein_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("DCM",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+        #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g4=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2.2|-logFC>2.5|neglogP_value>7.5)))
+
+datatable(df1)
+#write.csv(df1,file="dcm_nodm vs donor protein.csv")
+set4=df1[which(df1$P.Value<0.05),"name"]
+set4_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set4_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+# #pathway analysis
+# set.seed(202204)
+# experiment_data_imputation=knn.impute(t(as.matrix(experiment_data_noimputation)),3)
+# experiment_data_pathway=as.data.frame(t(experiment_data_imputation))
+# dim(experiment_data_pathway)
+#     
+# ##With voom for finding pathways
+# groupname<-as.factor(experiment_data_noimputation1$y)
+# design <- model.matrix(~ groupname + 0)
+# log2.cpm <- voom(experiment_data_pathway, design, normalize.method = "quantile")
+# fit <- lmFit(log2.cpm, design)
+# cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+# fit2 <- contrasts.fit(fit, cont.matrix)
+# fit2 <- eBayes(fit2)
+# limma.res=topTable(fit2,n=Inf,sort="p", adjust.method = "fdr")
+# fc_new <- limma.res$logFC
+# limma.res$entrez = mapIds(org.Hs.eg.db,
+#                      keys=row.names(limma.res), 
+#                      column="ENTREZID",
+#                      keytype=keytypes(org.Hs.eg.db)[2],
+#                      multiVals="first")
+# names(fc_new) <- limma.res$entrez
+# 
+# kegg_gene_list<-na.omit(fc_new)
+# kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+# kk2 <- gseKEGG(geneList     = kegg_gene_list,
+#                organism     = "hsa",
+#                nPerm        = 10000,
+#                minGSSize    = 3,
+#                maxGSSize    = 800,
+#                pvalueCutoff = 0.05,
+#                pAdjustMethod = "BH",
+#                keyType       = "ncbi-geneid")
+# datatable(as.data.frame(kk2))
+# clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+
+load("all_omics_lv_v6.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=metabolite_expression1[,union(grep("_DCM_No",colnames(metabolite_expression1)),grep("Donor_No",colnames(metabolite_expression1)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("DCM",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ 
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g5=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.5|-logFC>0.5|neglogP_value>2)))
+  datatable(df1)
+ # write.csv(df1,file="dcm_nodm vs donor metabolite.csv")
+ set5=df1[which(df1$P.Value<0.05),"name"] 
+  set5_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+  set5_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+  
+#         #pathway analysis: name mapping to change the metabolites names
+# nameref=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/BH 2020 scMerge_impute AMIDE and HILIC 14.12.21_Normalised.xlsx",sheet = 4)
+# sum(rownames(df1) %in% nameref$Metabolite)
+# 
+# df1_new=df1[which(rownames(df1) %in% nameref$Metabolite),]
+# df1_new$name=rownames(df1_new)
+# df1_new$name[as.numeric(na.omit(match(nameref$Metabolite,df1_new$name,nomatch = NA)))] <- nameref$`KEGG ID`[as.numeric(na.omit(match(df1_new$name,nameref$Metabolite,nomatch = NA)))]
+# dim(df1_new)
+# df2=df1_new[!is.na(df1_new$name),]
+# dim(df2)
+# fc=df2$logFC
+# names(fc)=df2$name
+# fc=sort(fc,decreasing = TRUE)
+# 
+# #name mapping for pathways
+# meta_pathway_name=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/2020 Human Heart Metabolomic functionally annotated metabolites.xlsx")
+# meta_pathway_name=meta_pathway_name[,c("KEGG pathway","KEGG")]
+# sum(meta_pathway_name$KEGG%in% names(fc))
+# 
+# library(clusterProfiler)
+# kk<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "BH")
+# datatable(as.data.frame(kk))
+# clusterProfiler::dotplot(kk, showCategory=10, split=".sign") + facet_grid(.~.sign)
+# kk2<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "none")
+# datatable(as.data.frame(kk2))
+# clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+# kk3<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,minGSSize=2,pAdjustMethod = "fdr")
+# datatable(as.data.frame(kk3))
+# clusterProfiler::dotplot(kk3, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+
+  load("all_omics_lv_v6.RData")
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+#changed 20220224: no overall filtering
+lipid_expression2=lipid_expression1
+dim(lipid_expression2)
+dim(lipid_expression2[which(rowMeans(!is.na(lipid_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+lipid_expression2=lipid_expression2[,colnames(lipid_expression2)%in%indexx]
+dim(lipid_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=lipid_expression2[,union(grep("_DCM_No",colnames(lipid_expression2)),grep("Donor_No",colnames(lipid_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("DCM",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+
+g6=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>1|-logFC>1|neglogP_value>2)))
+datatable(df1)
+#write.csv(df1,file="dcm_nodm vs donor lipid 2303.csv")
+set6=df1[which(df1$P.Value<0.05),"name"]
+set6_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set6_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+#ggsave(filename="dcm_nodm vs donor lipid2303.pdf",g6)
+```
+
+```{r}
+ggarrange(g4,g5,g6,g1,g2,g3,align = "hv",nrow = 2,ncol = 3)
+```
+
+```{r eval=FALSE}
+ggsave(filename="supp3_2303.pdf",ggarrange(g4,g5,g6,g1,g2,g3,align = "hv",nrow = 2,ncol = 3),width = 23, height = 20)
+```
+
+## venn diagram (adj p<0.05)
+
+```{r eval=FALSE}
+library(RColorBrewer)
+myCol <- brewer.pal(3, "Pastel2")[c(1, 2)]
+library(VennDiagram)
+# Chart
+v1=venn.diagram(
+        x = list(set1_restricted, set4_restricted),
+        category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, ...)
+  grid.draw(venn_object)
+}
+display_venn(x = list(set1_restricted, set4_restricted),
+              category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+# pdf(file="s2protein_venn.pdf")
+# grid.draw(v1)
+# dev.off()
+v2=venn.diagram(
+        x = list(set2_restricted, set5_restricted),
+        category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+
+# pdf(file="s2meta_venn.pdf")
+# grid.draw(v2)
+# dev.off()
+
+display_venn(x = list(set2_restricted, set5_restricted),
+              category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+set2_restricted
+set5_restricted
+
+v3=venn.diagram(
+        x = list(set3, set6),
+        category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+
+        # Output features
+        height = 14 ,
+        width = 15 ,
+        resolution = 300,
+        compression = "lzw",
+
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+
+
+)
+# pdf(file="supp3lipid_venn2303.pdf")
+# grid.draw(v3)
+# dev.off()
+
+display_venn(x = list(set3, set6),
+              category.names = c("DCM-T2DM" , "DCM-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+```
+
+# S3 {.tabset .tabset-fade .tabset-pills}
+
+* all >=21 donors, i.e. with those four young donors
+
+## HF-DM vs donor
+
+```{r}
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+infodt1 = colData(all_omics)
+infodt1$Age=as.numeric(infodt1$Age)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=protein_expression2[,union(grep("_Yes",colnames(protein_expression2)),grep("Donor_No",colnames(protein_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+        #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+# g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+#       geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+#       xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-DM vs Donor") +
+#       theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+# panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+#       geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+# 
+# datatable(df1)
+# #ggsave(filename="plot1.pdf",g1)
+
+g1=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2.5|-logFC>2.5|neglogP_value>8)))
+
+#write.csv(df1,file="hf_dm vs donor protein.csv")
+set1=df1[which(df1$P.Value<0.05),"name"]
+set1_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set1_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+
+load("all_omics_lv_v6.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=metabolite_expression1[,union(grep("_Yes",colnames(metabolite_expression1)),grep("Donor_No",colnames(metabolite_expression1)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+  g2=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.5|-logFC>0.5|neglogP_value>2)))
+ 
+  datatable(df1)
+  #write.csv(df1,file="hf_dm vs donor metabolite.csv")
+  set2=df1[which(df1$P.Value<0.05),"name"]
+  set2_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+  set2_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+  
+
+load("all_omics_lv_v6.RData")
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+#changed 20220224: no overall filtering
+lipid_expression2=lipid_expression1
+dim(lipid_expression2)
+dim(lipid_expression2[which(rowMeans(!is.na(lipid_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+lipid_expression2=lipid_expression2[,colnames(lipid_expression2)%in%indexx]
+dim(lipid_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=lipid_expression2[,union(grep("_Yes",colnames(lipid_expression2)),grep("Donor_No",colnames(lipid_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g3=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>1|-logFC>2.5|neglogP_value>1.8)))
+datatable(df1)
+#write.csv(df1,file="hf_dm vs donor lipid2303.csv")
+set3=df1[which(df1$P.Value<0.05),"name"]
+set3_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set3_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+#ggsave(filename="hf_dm vs donor lipid2303.pdf",g3)
+```
+
+
+## HF-no DM VS Donor
+
+```{r}
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+
+experiment_data_noimputation=protein_expression2
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Donor",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,0,1)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+        #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g4=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2|-logFC>2|neglogP_value>7)))
+
+datatable(df1)
+#write.csv(df1,file="hf_nodm vs donor protein.csv")
+set4=df1[which(df1$P.Value<0.05),"name"]
+set4_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set4_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+
+
+load("all_omics_lv_v6.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+
+experiment_data_noimputation=metabolite_expression1
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Donor",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,0,1)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ 
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g5=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.5|-logFC>0.5|neglogP_value>3)))
+  datatable(df1)
+  #write.csv(df1,file="hf_nodm vs donor metabolite.csv")
+ set5=df1[which(df1$P.Value<0.05),"name"] 
+  set5_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+  set5_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+  
+
+
+  load("all_omics_lv_v6.RData")
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+#changed 20220224: no overall filtering
+lipid_expression2=lipid_expression1
+dim(lipid_expression2)
+dim(lipid_expression2[which(rowMeans(!is.na(lipid_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD")&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+lipid_expression2=lipid_expression2[,colnames(lipid_expression2)%in%indexx]
+dim(lipid_expression2)
+
+
+experiment_data_noimputation=lipid_expression2
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Donor",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,0,1)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+
+g6=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("HF-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>1.2|-logFC>1.2|neglogP_value>2)))
+datatable(df1)
+#write.csv(df1,file="hf_nodm vs donor lipid2303.csv")
+set6=df1[which(df1$P.Value<0.05),"name"]
+set6_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set6_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+#ggsave(filename="hf_nodm vs donor lipid2303.pdf",g6)
+```
+
+```{r eval=FALSE}
+ggsave(filename="s3.pdf",ggarrange(g4,g5,g6,g1,g2,g3,align = "hv",nrow = 2,ncol = 3),width = 23, height = 20)
+```
+
+```{r}
+ggarrange(g4,g5,g6,g1,g2,g3,align = "hv",nrow = 2,ncol = 3)
+```
+
+## venn diagram (adj p<0.05)
+
+```{r eval=FALSE}
+library(RColorBrewer)
+myCol <- brewer.pal(3, "Pastel2")[c(1, 2)]
+library(VennDiagram)
+# Chart
+v1=venn.diagram(
+        x = list(set1_restricted, set4_restricted),
+        category.names = c("HF-T2DM" , "HF-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, ...)
+  grid.draw(venn_object)
+}
+display_venn(x = list(set1_restricted, set4_restricted),
+              category.names = c("HF-T2DM" , "HF-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+# pdf(file="s3protein_venn.pdf")
+# grid.draw(v1)
+# dev.off()
+v2=venn.diagram(
+        x = list(set2_restricted, set5_restricted),
+        category.names = c("HF-T2DM" , "HF-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+
+# pdf(file="s3meta_venn.pdf")
+# grid.draw(v2)
+# dev.off()
+
+display_venn(x = list(set2_restricted, set5_restricted),
+              category.names = c("HF-T2DM" , "HF-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+set2_restricted
+set5_restricted
+
+v3=venn.diagram(
+        x = list(set3, set6),
+        category.names = c("HF-T2DM" , "HF-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+
+        # Output features
+        height = 14 ,
+        width = 15 ,
+        resolution = 300,
+        compression = "lzw",
+
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+
+
+)
+# pdf(file="supp1lipid_venn2303.pdf")
+# grid.draw(v3)
+# dev.off()
+
+display_venn(x = list(set3, set6),
+              category.names = c("HF-T2DM" , "HF-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+```
+
+
+# S1 {.tabset .tabset-fade .tabset-pills}
+
+## MDS
+
+* ">=21" donors are applied, top 500 genes/metabolites/lipid are used in the calculation of the distance matrix (default in limma)
+
+```{r}
+# #an limma mds plot example
+# # First 50 probes are differentially expressed in second group
+# sd <- 0.3*sqrt(4/rchisq(1000,df=4))
+# x <- matrix(rnorm(1000*6,sd=sd),1000,6)
+# rownames(x) <- paste("Gene",1:1000)
+# x[1:50,4:6] <- x[1:50,4:6] + 2
+# # without labels, indexes of samples are plotted.
+# mds <- plotMDS(x,  col=c(rep("black",3), rep("red",3)) )
+# # or labels can be provided, here group indicators:
+# plotMDS(mds,  col=c(rep("black",3), rep("red",3)), labels= c(rep("Grp1",3), rep("Grp2",3)))
+
+
+
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+dim(protein_expression1)
+protein_expression2=protein_expression1
+dim(protein_expression2)
+
+IHD_DM=grep("_IHD_Yes",colnames(protein_expression2))
+col_IHD_DM=colnames(protein_expression2)[IHD_DM]
+IHD_NO=grep("_IHD_No",colnames(protein_expression2))
+col_IHD_NO=colnames(protein_expression2)[IHD_NO]
+DCM_DM=grep("_DCM_Yes",colnames(protein_expression2))
+col_DCM_DM=colnames(protein_expression2)[DCM_DM]
+DCM_NO=grep("_DCM_No",colnames(protein_expression2))
+col_DCM_NO=colnames(protein_expression2)[DCM_NO]
+Donor=grep("Donor",colnames(protein_expression2))
+col_Donor=colnames(protein_expression2)[Donor]
+col_Donor=col_Donor[-c(2,6,10,11,13,18,20,24)]#hard coding here to remove those <21 donors
+Donor=Donor[-c(2,6,10,11,13,18,20,24)]
+col_young_donor=col_Donor[c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+col_other_donor=col_Donor[-c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+
+
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%c(col_IHD_DM,col_IHD_NO,col_DCM_DM,col_DCM_NO,col_young_donor,col_other_donor)]
+dim(protein_expression2)
+colnames(protein_expression2)
+
+color_index=ifelse(colnames(protein_expression2)%in%col_IHD_DM,"IHD_DM",ifelse(colnames(protein_expression2)%in%col_IHD_NO,"IHD_NO",ifelse(colnames(protein_expression2)%in%col_DCM_DM,"DCM_DM",ifelse(colnames(protein_expression2)%in%col_DCM_NO,"DCM_NO",ifelse(colnames(protein_expression2)%in%col_young_donor,"young_donor","other_donor"))))) 
+real_color=ifelse(color_index=="IHD_DM","red",ifelse(color_index=="IHD_NO","green",ifelse(color_index=="DCM_DM","blue",ifelse(color_index=="DCM_NO","purple",ifelse(color_index=="young_donor","orange","pink"))))) 
+
+
+mds <- plotMDS(protein_expression2,  col=real_color ,cex=0.5)
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_IHD_DM,"IHD_DM",ifelse(mdsdata$name%in%col_IHD_NO,"IHD_NO",ifelse(mdsdata$name%in%col_DCM_DM,"DCM_DM",ifelse(mdsdata$name%in%col_DCM_NO,"DCM_NO",ifelse(mdsdata$name%in%col_young_donor,"young_donor","other_donor"))))) 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("s1a.pdf",gg,height = 5, width = 7)
+
+
+
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+IHD_DM=grep("_IHD_Yes",colnames(metabolite_expression1))
+col_IHD_DM=colnames(metabolite_expression1)[IHD_DM]
+IHD_NO=grep("_IHD_No",colnames(metabolite_expression1))
+col_IHD_NO=colnames(metabolite_expression1)[IHD_NO]
+DCM_DM=grep("_DCM_Yes",colnames(metabolite_expression1))
+col_DCM_DM=colnames(metabolite_expression1)[DCM_DM]
+DCM_NO=grep("_DCM_No",colnames(metabolite_expression1))
+col_DCM_NO=colnames(metabolite_expression1)[DCM_NO]
+Donor=grep("Donor",colnames(metabolite_expression1))
+col_Donor=colnames(metabolite_expression1)[Donor]
+col_Donor=col_Donor[-c(1:8)]#hard coding here to remove those <21 donors
+Donor=Donor[-c(1:8)]
+col_young_donor=col_Donor[c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+col_other_donor=col_Donor[-c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%c(col_IHD_DM,col_IHD_NO,col_DCM_DM,col_DCM_NO,col_Donor)]
+dim(metabolite_expression1)
+colnames(metabolite_expression1)
+
+
+color_index=ifelse(colnames(metabolite_expression1)%in%col_IHD_DM,"IHD_DM",ifelse(colnames(metabolite_expression1)%in%col_IHD_NO,"IHD_NO",ifelse(colnames(metabolite_expression1)%in%col_DCM_DM,"DCM_DM",ifelse(colnames(metabolite_expression1)%in%col_DCM_NO,"DCM_NO",ifelse(colnames(metabolite_expression1)%in%col_young_donor,"young_donor","other_donor"))))) 
+real_color=ifelse(color_index=="IHD_DM","red",ifelse(color_index=="IHD_NO","green",ifelse(color_index=="DCM_DM","blue",ifelse(color_index=="DCM_NO","purple",ifelse(color_index=="young_donor","orange","pink"))))) 
+
+mds <- plotMDS(metabolite_expression1,  col=real_color ,cex=0.5)
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_IHD_DM,"IHD_DM",ifelse(mdsdata$name%in%col_IHD_NO,"IHD_NO",ifelse(mdsdata$name%in%col_DCM_DM,"DCM_DM",ifelse(mdsdata$name%in%col_DCM_NO,"DCM_NO",ifelse(mdsdata$name%in%col_young_donor,"young_donor","other_donor"))))) 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("s1b.pdf",gg,height = 5, width = 7)
+
+
+
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+
+IHD_DM=grep("_IHD_Yes",colnames(lipid_expression1))
+col_IHD_DM=colnames(lipid_expression1)[IHD_DM]
+IHD_NO=grep("_IHD_No",colnames(lipid_expression1))
+col_IHD_NO=colnames(lipid_expression1)[IHD_NO]
+DCM_DM=grep("_DCM_Yes",colnames(lipid_expression1))
+col_DCM_DM=colnames(lipid_expression1)[DCM_DM]
+DCM_NO=grep("_DCM_No",colnames(lipid_expression1))
+col_DCM_NO=colnames(lipid_expression1)[DCM_NO]
+Donor=grep("Donor",colnames(lipid_expression1))
+col_Donor=colnames(lipid_expression1)[Donor]
+col_Donor=col_Donor[-c(1:8)]#hard coding here to remove those <21 donors
+Donor=Donor[-c(1:8)]
+col_young_donor=col_Donor[c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+col_other_donor=col_Donor[-c(grep("90",col_Donor),grep("91",col_Donor),grep("92",col_Donor),grep("93",col_Donor))]
+
+lipid_expression1=lipid_expression1[,colnames(lipid_expression1)%in%c(col_IHD_DM,col_IHD_NO,col_DCM_DM,col_DCM_NO,col_Donor)]
+dim(lipid_expression1)
+colnames(lipid_expression1)
+
+
+color_index=ifelse(colnames(lipid_expression1)%in%col_IHD_DM,"IHD_DM",ifelse(colnames(lipid_expression1)%in%col_IHD_NO,"IHD_NO",ifelse(colnames(lipid_expression1)%in%col_DCM_DM,"DCM_DM",ifelse(colnames(lipid_expression1)%in%col_DCM_NO,"DCM_NO",ifelse(colnames(lipid_expression1)%in%col_young_donor,"young_donor","other_donor"))))) 
+real_color=ifelse(color_index=="IHD_DM","red",ifelse(color_index=="IHD_NO","green",ifelse(color_index=="DCM_DM","blue",ifelse(color_index=="DCM_NO","purple",ifelse(color_index=="young_donor","orange","pink"))))) 
+
+
+mds <- plotMDS(lipid_expression1,  col=real_color,cex=0.5 )
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_IHD_DM,"IHD_DM",ifelse(mdsdata$name%in%col_IHD_NO,"IHD_NO",ifelse(mdsdata$name%in%col_DCM_DM,"DCM_DM",ifelse(mdsdata$name%in%col_DCM_NO,"DCM_NO",ifelse(mdsdata$name%in%col_young_donor,"young_donor","other_donor"))))) 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("MDS plot for lipids2303.pdf",gg,height = 5, width = 7)
+
+```
+
+
+## upset plot
+
+* notice here, we use decide test to get all comparisons all at once instead of performing each comparison individually, the donors are used as the >=47 donors for others, >=21 for dcm-dm and dcm-no dm
+```{r}
+#results <- decideTests(fit2,p.value =0.2, lfc= log2(1.2),adjust.method = "none") 
+
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+dim(protein_expression1)
+protein_expression2=protein_expression1
+dim(protein_expression2)
+
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD"),1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+
+experiment_data_noimputation=protein_expression2
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+IHD_DM=grep("_IHD_Yes",colnames(experiment_data_noimputation))
+IHD_NO=grep("_IHD_No",colnames(experiment_data_noimputation))
+DCM_DM=grep("_DCM_Yes",colnames(experiment_data_noimputation))
+DCM_NO=grep("_DCM_No",colnames(experiment_data_noimputation))
+Donor=grep("Donor",colnames(experiment_data_noimputation))
+young_donor=Donor[which(Donor%in%c(grep("90",colnames(experiment_data_noimputation)),grep("91",colnames(experiment_data_noimputation)),grep("92",colnames(experiment_data_noimputation)),grep("93",colnames(experiment_data_noimputation))))]
+other_donor=Donor[-which(Donor%in%c(grep("90",colnames(experiment_data_noimputation)),grep("91",colnames(experiment_data_noimputation)),grep("92",colnames(experiment_data_noimputation)),grep("93",colnames(experiment_data_noimputation))))]
+
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1)%in%IHD_DM,"IHD_DM",ifelse(rownames(experiment_data_noimputation1)%in%IHD_NO,"IHD_NO",ifelse(rownames(experiment_data_noimputation1)%in%DCM_DM,"DCM_DM",ifelse(rownames(experiment_data_noimputation1)%in%DCM_NO,"DCM_NO",ifelse(rownames(experiment_data_noimputation1)%in%young_donor,"young_donor","other_donor"))))) 
+
+#de analysis-- should be on the non-imputed data
+
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts( IHD_DM_D="groupnameIHD_DM-groupnameother_donor",IHD_NO_D="groupnameIHD_NO-groupnameother_donor",DCM_DM_D="groupnameDCM_DM-groupnameother_donor-groupnameyoung_donor",DCM_NO_D="groupnameDCM_NO-groupnameother_donor-groupnameyoung_donor", levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ results <- decideTests(fit2,p.value =0.05, adjust.method = "BH") 
+ results2=as.data.frame(results)
+ results2[results2==-1]=1 #need to change down regulated to regulated for upset plot
+ results2[is.na(results2)]=0
+upset(as.data.frame(results2),nsets = 4)
+grid.text("Summary plot for significantly expressed omics",x = 0.65, y=0.95, gp=gpar(fontsize=10))
+#cant auto save as well
+
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition%in%c("DCM","IHD"),1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+
+experiment_data_noimputation=metabolite_expression1
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+IHD_DM=grep("_IHD_Yes",colnames(experiment_data_noimputation))
+IHD_NO=grep("_IHD_No",colnames(experiment_data_noimputation))
+DCM_DM=grep("_DCM_Yes",colnames(experiment_data_noimputation))
+DCM_NO=grep("_DCM_No",colnames(experiment_data_noimputation))
+Donor=grep("Donor",colnames(experiment_data_noimputation))
+young_donor=Donor[which(Donor%in%c(grep("90",colnames(experiment_data_noimputation)),grep("91",colnames(experiment_data_noimputation)),grep("92",colnames(experiment_data_noimputation)),grep("93",colnames(experiment_data_noimputation))))]
+other_donor=Donor[-which(Donor%in%c(grep("90",colnames(experiment_data_noimputation)),grep("91",colnames(experiment_data_noimputation)),grep("92",colnames(experiment_data_noimputation)),grep("93",colnames(experiment_data_noimputation))))]
+
+
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1)%in%IHD_DM,"IHD_DM",ifelse(rownames(experiment_data_noimputation1)%in%IHD_NO,"IHD_NO",ifelse(rownames(experiment_data_noimputation1)%in%DCM_DM,"DCM_DM",ifelse(rownames(experiment_data_noimputation1)%in%DCM_NO,"DCM_NO",ifelse(rownames(experiment_data_noimputation1)%in%young_donor,"young_donor","other_donor"))))) 
+
+#de analysis-- should be on the non-imputed data
+
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+   cont.matrix <- makeContrasts( IHD_DM_D="groupnameIHD_DM-groupnameother_donor",IHD_NO_D="groupnameIHD_NO-groupnameother_donor",DCM_DM_D="groupnameDCM_DM-groupnameother_donor-groupnameyoung_donor",DCM_NO_D="groupnameDCM_NO-groupnameother_donor-groupnameyoung_donor", levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ results <- decideTests(fit2,p.value =0.05, adjust.method = "BH") 
+ results2=as.data.frame(results)
+ results2[results2==-1]=1 #need to change down regulated to regulated for upset plot
+results2[is.na(results2)]=0
+upset(as.data.frame(results2),nsets = 4,nintersects = NA)
+grid.text("Summary plot for significantly expressed omics",x = 0.65, y=0.95, gp=gpar(fontsize=10))
+#cant auto save as well
+#https://upset.app/
+
+```
+
+
+# S4 {.tabset .tabset-fade .tabset-pills}
+
+## MDS female and male
+
+* notice here, donors with >=21 are applied, 10 males and 10 females (in lipids data, one donor, donor 100 is missing)
+```{r}
+
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+dim(protein_expression1)
+protein_expression2=protein_expression1[,grep("Donor",colnames(protein_expression1))]
+protein_expression2=protein_expression2[,-c(grep("82",colnames(protein_expression2)),grep("83",colnames(protein_expression2)),grep("84",colnames(protein_expression2)),grep("85",colnames(protein_expression2)),grep("86",colnames(protein_expression2)),grep("87",colnames(protein_expression2)),grep("88",colnames(protein_expression2)),grep("89",colnames(protein_expression2)))]
+dim(protein_expression2)
+colnames(protein_expression2)
+
+M=grep("M",colnames(protein_expression2))
+col_M=colnames(protein_expression2)[M]
+F=grep("F",colnames(protein_expression2))
+col_F=colnames(protein_expression2)[F]
+
+color_index=ifelse(colnames(protein_expression2)%in%col_M,"M","F") 
+real_color=ifelse(color_index=="M","red","blue") 
+
+mds <- plotMDS(protein_expression2,  col=real_color,cex=0.5 )
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_M,"M","F") 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("s4a.pdf",gg,height = 5, width = 7)
+
+
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+metabolite_expression1=metabolite_expression1[,grep("Donor",colnames(metabolite_expression1))]
+metabolite_expression1=metabolite_expression1[,-c(grep("82",colnames(metabolite_expression1)),grep("83",colnames(metabolite_expression1)),grep("84",colnames(metabolite_expression1)),grep("85",colnames(metabolite_expression1)),grep("86",colnames(metabolite_expression1)),grep("87",colnames(metabolite_expression1)),grep("88",colnames(metabolite_expression1)),grep("89",colnames(metabolite_expression1)))]
+
+dim(metabolite_expression1)
+colnames(metabolite_expression1)
+
+M=grep("M",colnames(metabolite_expression1))
+col_M=colnames(metabolite_expression1)[M]
+F=grep("F",colnames(metabolite_expression1))
+col_F=colnames(metabolite_expression1)[F]
+
+color_index=ifelse(colnames(metabolite_expression1)%in%col_M,"M","F") 
+real_color=ifelse(color_index=="M","red","blue") 
+
+mds <- plotMDS(metabolite_expression1,  col=real_color ,cex=0.5)
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_M,"M","F") 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("s4b.pdf",gg,height = 5, width = 7)
+
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+
+lipid_expression1=lipid_expression1[,grep("Donor",colnames(lipid_expression1))]
+lipid_expression1=lipid_expression1[,-c(grep("82",colnames(lipid_expression1)),grep("83",colnames(lipid_expression1)),grep("84",colnames(lipid_expression1)),grep("85",colnames(lipid_expression1)),grep("86",colnames(lipid_expression1)),grep("87",colnames(lipid_expression1)),grep("88",colnames(lipid_expression1)),grep("89",colnames(lipid_expression1)))]
+
+dim(lipid_expression1)
+colnames(lipid_expression1)
+
+M=grep("M",colnames(lipid_expression1))
+col_M=colnames(lipid_expression1)[M]
+F=grep("F",colnames(lipid_expression1))
+col_F=colnames(lipid_expression1)[F]
+
+color_index=ifelse(colnames(lipid_expression1)%in%col_M,"M","F") 
+real_color=ifelse(color_index=="M","red","blue") 
+
+
+mds <- plotMDS(lipid_expression1,  col=real_color,cex=0.5 )
+
+mdsdata=as.data.frame(mds$x)
+mdsdata$name=rownames(mdsdata)
+mdsdata$y=mds$y
+mdsdata$group=ifelse(mdsdata$name%in%col_M,"M","F") 
+
+gg=ggplot(mdsdata,aes(x=mdsdata$`mds$x`,y=mdsdata$y,color=group))+geom_point()+theme_bw()+xlab(" ")+ylab(" ")
+gg
+#ggsave("MDS plot M vs F lipids 2303.pdf",gg,height = 5, width = 7)
+```
+
+## de analysis
+```{r}
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="Donor",0,2)))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+
+experiment_data_noimputation=protein_expression2
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("M",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+        #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g4=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("M vs F") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2|-logFC>2|neglogP_value>2.5)))
+
+datatable(df1)
+#write.csv(df1,"fm_protein.csv")
+
+
+
+load("all_omics_lv_v5.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="Donor",0,2)))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+
+experiment_data_noimputation=metabolite_expression1
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("M",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ 
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g5=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("M vs F") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.5|-logFC>0.5|neglogP_value>1.5)))
+  datatable(df1)
+#write.csv(df1,"fm_metabolite.csv")
+
+
+  load("all_omics_lv_v6.RData")
+lipid_expression=assay(all_omics@ExperimentList$lipid, "log2")
+lipid_expression1=as.data.frame(lipid_expression)
+lipid_expression1=lipid_expression1[-which(rownames(lipid_expression1)%in% c('Total PC', 'TOTAL TG','TOTAL SM','TOTAL PI','TOTAL PG','TOTAL LPC', 'TOTAL LPE', 'TOTAL HC' ,'TOTAL DG','TOTAL CL', 'TOTAL ACCA', 'TOTAL PE','TOTAL CER')),]
+
+dim(lipid_expression1)
+#changed 20220224: no overall filtering
+lipid_expression2=lipid_expression1
+dim(lipid_expression2)
+dim(lipid_expression2[which(rowMeans(!is.na(lipid_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="Donor",0,2)))
+infodt1$Age=as.numeric(infodt1$Age)
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+lipid_expression2=lipid_expression2[,colnames(lipid_expression2)%in%indexx]
+dim(lipid_expression2)
+
+
+experiment_data_noimputation=lipid_expression2
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("M",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+
+g6=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("M vs F") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>0.8|-logFC>0.8|neglogP_value>1)))
+datatable(df1)
+#write.csv(df1,"fm_lipid 2303.csv")
+#ggsave("m_vs_f_lipids2303.pdf",g6)
+```
+
+
+```{r eval=FALSE}
+ggsave(filename="s4.pdf",ggarrange(g4,g5,g6,align = "hv",nrow = 1,ncol = 3),width = 23, height = 10)
+```
+
+
+
+

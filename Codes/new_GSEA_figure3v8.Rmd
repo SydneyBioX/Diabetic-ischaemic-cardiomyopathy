@@ -1,0 +1,1659 @@
+---
+title: "new GSEA analysis for figure3"
+author: "Yunwei Zhang"
+date: “`r paste0('Initiated on 20220908, compiled on ', format(Sys.time(), '%Y %b %d'))`”
+output:
+  
+  html_document:
+    code_folding: hide
+    fig_height: 8
+    fig_width: 12
+    highlight: tango
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,message = FALSE)
+#usethis::edit_r_environ()
+#R_MAX_VSIZE=700Gb
+```
+
+* this file is updated 0819, using the v5 data and >=47 donors for the comparison. (this is the updated file for the v5)
+* plot the pvalues in the plots.
+* the pathway analysis is changed to no adjustment and restricted set size
+* this file is the updated one on 0824 with no adjustment to pathway analysis (note that previously, we just plot the pval but the analysis was done with adj and without min set size, but now it is with min3 max500 without adj)
+* this file updated 0907 for figure4 ab on ben's selected 8 GO pathways
+* this file is to check the cut-off pval code is just to display above the cut-off values, added 0908 
+* this file is used to output figure3 ef 20220923
+
+```{r}
+#library(GEOquery)  ## go to https://github.com/seandavi/GEOquery for installation details
+#library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(MultiAssayExperiment)
+library(S4Vectors)
+library(SummarizedExperiment)
+library(DT)
+library(randomForest)
+library(e1071)
+library("bnstruct")
+#library(rminer)
+library(ggpubr)
+setwd("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis")
+# install.packages("VANData_1.0.0.tgz", repos=NULL,type="source")
+# install.packages("VAN_1.0.0.tgz", repos=NULL,type="source") 
+
+library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(gage)
+library(knitr)
+library(DT)
+library(janitor)
+library(KEGGREST)
+library(MASS)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(dplyr)
+library(reshape)
+library(ggplot2)
+library(plyr)
+library(gtable)
+library(grid)
+library(pheatmap)
+library(reshape2)
+library(plotly)
+library(UpSetR)
+library(MatchIt)
+require(pathview)
+#library(STRINGdb)
+## Kegg sets data
+require(gage)
+require(gageData)
+kegg = kegg.gsets(species = "hsa", id.type = "kegg")
+kegg.sets.hsa = kegg$kg.sets
+
+# go.hs=go.gsets(species="human")
+# go.bp=go.hs$go.sets[go.hs$go.subs$BP]
+# go.mf=go.hs$go.sets[go.hs$go.subs$MF]
+# go.bpmf=go.hs$go.sets[go.hs$go.subs$BP&go.hs$go.subs$MF] #not equal, wired
+# go.bpmf2=append(go.bp,go.mf)
+require(gage)
+require(gageData)
+library(clusterProfiler)
+library(enrichplot)
+library(GO.db)
+# #failed install
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("GOfuncR")
+# 
+# if (!requireNamespace("devtools", quietly=TRUE))
+#     install.packages("devtools")
+# devtools::install_github("sgrote/GOfuncR")
+```
+
+
+# IHD-DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+## DE analysis and standard pipeline
+```{r}
+load("all_omics_lv_v5.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$Age=as.numeric(infodt1$Age)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="IHD"&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=47)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=protein_expression2[,union(grep("_IHD_Yes",colnames(protein_expression2)),grep("Donor_No",colnames(protein_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    # g1=ggplot2::ggplot(df1, aes(logFC,neglogP_value,label=name))+
+    #   geom_point(size = 1, alpha=1) +
+    #   xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+    #   theme_bw(base_size = 16) +
+    #   geom_hline(yintercept = 1.3, linetype = "dashed", colour = "brown3")+theme(aspect.ratio = 1)
+    
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+ggplotly(g1)
+df1[,c(2:7,9)]=round(df1[,c(2:7,9)],4)
+datatable(df1)
+
+#pathway analysis
+#pathway analysis as in our shiny:delete missing values
+experiment_data_pathway=na.omit(experiment_data_noimputation)
+dim(experiment_data_pathway)
+    
+##With voom for finding pathways
+groupname<-as.factor(experiment_data_noimputation1$y)
+design <- model.matrix(~ groupname + 0)
+log2.cpm <- voom(experiment_data_pathway, design, normalize.method = "quantile")
+fit <- lmFit(log2.cpm, design)
+cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+limma.res=topTable(fit2,n=Inf,sort="p", adjust.method = "fdr")
+fc_new <- limma.res$logFC
+limma.res$entrez = mapIds(org.Hs.eg.db,
+                     keys=row.names(limma.res), 
+                     column="ENTREZID",
+                     keytype=keytypes(org.Hs.eg.db)[2],
+                     multiVals="first")
+names(fc_new) <- limma.res$entrez
+
+geneList<-na.omit(fc_new)
+geneList = sort(geneList, decreasing = TRUE)
+kk2 <- gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 100,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.05,
+              verbose      = FALSE)
+kk2_dt=as.data.frame(kk2)
+kk2_dt[,c(4,5,7,8)]=round(kk2_dt[,c(4,5,7,8)],4)
+datatable(kk2_dt)
+clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+BP_namelist=kk2_dt$Description
+#https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html
+#gene ontology over-representation test
+ego2 <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+ego2_dt=as.data.frame(ego2)
+ego2_dt[,5:7]=round(ego2_dt[,5:7],4)
+datatable(ego2_dt)
+
+
+# Let is suppose I have a collection of genesets called : HALLMARK Now let is suppose there is a specific geneset there called: E2F_targets
+# 
+# BgRatio, M/N.
+# 
+# M = size of the geneset (eg size of the E2F_targets); (is the number of genes within that distribution that are annotated (either directly or indirectly) to the node of interest).
+# 
+# N = size of all of the unique genes in the collection of genesets (example the HALLMARK collection); (is the total number of genes in the background distribution (universe)
+# 
+# GeneRatio is k/n.
+# 
+# k = size of the overlap of 'a vector of gene id' you input with the specific geneset (eg E2F_targets), only unique genes; (the number of genes within that list n, which are annotated to the node.
+# 
+# n = size of the overlap of 'a vector of gene id' you input with all the members of the collection of genesets (eg the HALLMARK collection),only unique genes; is the size of the list of genes of interest
+
+#adj pval and qval
+#https://support.bioconductor.org/p/96329/
+#adj pval is the fdr adjusted pval, qval from another package is another adjustment method
+#the BH approach is slightly more conservative than qvalue
+
+#enrichgo:
+# Over Representation Analysis (ORA) (Boyle et al. 2004) is a widely used approach to determine whether known biological functions or processes are over-represented (= enriched) in an experimentally-derived gene list, e.g. a list of differentially expressed genes (DEGs).
+# 
+# The p-value can be calculated by hypergeometric distribution.
+
+#Leading edge analysis reports Tags to indicate the percentage of genes contributing to the enrichment score, List to indicate where in the list the enrichment score is attained and Signal for enrichment signal strength.
+
+#It would also be very interesting to get the core enriched genes that contribute to the enrichment. Our packages (clusterProfiler, DOSE, meshes and ReactomePA) support leading edge analysis and report core enriched genes in GSEA analysis.
+
+#get pathway maps
+result_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+result_path_dt=as.data.frame(result_path)
+result_path_dt2=result_path_dt[,c("Description","geneID")]
+
+result_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+result_path_dt3=rbind(result_path_dt3,dt)
+}
+```
+
+
+```{r}
+kk3 <- gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "MF",
+              minGSSize    = 100,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.05,
+              verbose      = FALSE)
+kk3_dt=as.data.frame(kk3)
+kk3_dt[,c(4,5,7,8)]=round(kk3_dt[,c(4,5,7,8)],4)
+datatable(as.data.frame(kk3_dt))
+clusterProfiler::dotplot(kk3, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+#https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html
+#gene ontology over-representation test
+ego3 <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+ego3_dt=as.data.frame(ego3)
+ego3_dt[,5:7]=round(ego3_dt[,5:7],4)
+datatable(as.data.frame(ego3_dt))
+
+MF_namelist=kk3_dt$Description
+
+#get pathway maps
+MFresult_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+MFresult_path_dt=as.data.frame(MFresult_path)
+MFresult_path_dt2=MFresult_path_dt[,c("Description","geneID")]
+
+MFresult_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(MFresult_path_dt2)){
+X2=unlist(strsplit(MFresult_path_dt2$geneID[i],"/"))
+X1=rep(MFresult_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+MFresult_path_dt3=rbind(MFresult_path_dt3,dt)
+}
+```
+
+## check list for ecm & scm gene groups
+```{r}
+
+#new things 20220907: add customised pathway analysis results
+name=c("GO:0030198","GO:0055007","GO:0030239","GO:0060047","GO:0007010","GO:0031012","GO:0043292","GO:0005856")
+AnnotationDbi::select(GO.db, keys=name, columns=c("TERM","ONTOLOGY"), keytype="GOID")
+
+pathwayIDs=c("extracellular matrix organization","cardiac muscle cell differentiation", "myofibril assembly", "heart contraction" ,"cytoskeleton organization","extracellular matrix"  ,"contractile fiber", "cytoskeleton")
+
+all_name=c(name,GOBPOFFSPRING[["GO:0030198"]],GOBPOFFSPRING[["GO:0055007"]],GOBPOFFSPRING[["GO:0030239"]],GOBPOFFSPRING[["GO:0060047"]],GOBPOFFSPRING[["GO:0007010"]],GOCCOFFSPRING[["GO:0031012"]],GOCCOFFSPRING[["GO:0043292"]],GOCCOFFSPRING[["GO:0005856"]])
+
+all_name2=AnnotationDbi::select(GO.db, keys=all_name, columns=c("TERM","ONTOLOGY"), keytype="GOID")
+
+
+GO_v<- AnnotationDbi::select(org.Hs.eg.db, keys=all_name2$GOID, columns=c("GO","ONTOLOGY","SYMBOL","ENTREZID"),keytype="GO")
+
+pp2=merge(all_name2,GO_v,by.x="GOID",by.y="GO",all=TRUE)
+datatable(pp2%>%group_by(GOID)%>%summarise(n=n()))
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+pathway_list3=pp2[,c("TERM","ENTREZID")]
+colnames(pathway_list3)=c("pathwayIDs","geneIDs")
+sum(names(gene_list)%in% pathway_list3$geneIDs)
+sum(!names(gene_list)%in% pathway_list3$geneIDs)
+length(gene_list)
+#pathway_list3%>%group_by(pathwayIDs)%>%summarise(n=n())
+
+set.seed(20220907)
+gse <- GSEA(gene_list, TERM2GENE = pathway_list3,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = 0.05)
+figure4a=as.data.frame(gse)
+figure4av2=figure4a
+figure4av2[,4:9]=round(figure4av2[,4:9],3)
+datatable(figure4av2)
+```
+
+
+```{r eval=FALSE}
+
+#new things 20220905: add customised pathway analysis results
+name=c("GO:0030198","GO:0055007","GO:0030239","GO:0060047","GO:0007010","GO:0031012","GO:0043292","GO:0005856")
+
+#get pathway maps
+#new things 20220905: add customised pathway analysis results
+result_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "none",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+result_path_dt=as.data.frame(result_path)
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)#about 200 enrichgo not in gsego
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+# "GO:0007010"%in%result_path_dt2$ID
+# "biological process"%in%result_path_dt2$Description
+# "cellular process"%in%result_path_dt2$Description
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+BP_result=gse_dt3
+"GO:0007010"%in%BP_result$X3
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "MF",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+MF_result=gse_dt3
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "CC",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+CC_result=gse_dt3
+
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+
+pathway_list=rbind.data.frame(BP_result,MF_result,CC_result)
+colnames(pathway_list)=c("pathwayIDs","geneIDs","GOID")
+pathway_list2=pathway_list[pathway_list$GOID%in%name,]
+pathway_list3=pathway_list2[,1:2]
+
+sum(names(gene_list)%in% pathway_list3$geneIDs)
+length(gene_list)
+pathway_list3%>%group_by(pathwayIDs)%>%summarise(n=n())
+
+set.seed(20220905)
+gse <- GSEA(gene_list, TERM2GENE = pathway_list3,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = 0.05)
+figure4a=as.data.frame(gse)
+```
+
+## continue for DE analysis and standard pipeline
+
+* so, using the function gseKEGG, we are not able to get meaningful things such as gene ratio, therefore, i tried enrichKEGG, however, i am not able to get 551 pathwyas from it. oh, because from the original 551, only 347 are matched with the geneids, so, using this direct keggpathway gives us the same result as using enrichKEGG without threshold values. 
+```{r}
+kegg_gene_list<-na.omit(fc_new)
+kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+set.seed(202205)
+kk2 <- gseKEGG(geneList     = kegg_gene_list,
+               organism     = "hsa",
+               nPerm        = 10000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "BH",
+               keyType       = "ncbi-geneid")
+datatable(as.data.frame(kk2))
+clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+both2=as.data.frame(kk2)
+both2=both2[-grep("disease",both2$Description),]
+ggplot(both2,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("GSEA for significantly downregulated and upregulated pathways")+labs(y="Enrichment score")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+#get pathway maps
+KEGGresult_path <- enrichKEGG(gene         = names(geneList),
+              organism = "hsa", keyType = "kegg", pvalueCutoff = 1, pAdjustMethod = "BH",minGSSize = 0, maxGSSize = 50000000000, qvalueCutoff = 1)
+KEGGresult_path_dt=as.data.frame(KEGGresult_path)
+KEGGresult_path_dt2=KEGGresult_path_dt[,c("Description","geneID")]
+
+KEGGresult_path_dt2=KEGGresult_path_dt2[-grep("disease",KEGGresult_path_dt2$Description),]
+
+KEGGresult_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(KEGGresult_path_dt2)){
+X2=unlist(strsplit(KEGGresult_path_dt2$geneID[i],"/"))
+X1=rep(KEGGresult_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+KEGGresult_path_dt3=rbind(KEGGresult_path_dt3,dt)
+}
+print(paste("The total number of kegg pathways is",length(unique(KEGGresult_path_dt3$X1))))
+
+#get all kegg pathways with the mapping
+kegg_full_list=download_KEGG("hsa", keggType = "KEGG", keyType = "kegg")
+head(kegg_full_list[[1]])
+head(kegg_full_list[[2]])
+
+kegg_full_list1=kegg_full_list[[1]]
+length(unique(kegg_full_list1$from))
+
+kegg_full_list2=kegg_full_list[[2]]
+dim(kegg_full_list2)
+
+kegg_full_dt=merge(kegg_full_list1,kegg_full_list2,by="from")
+kegg_full_dt=kegg_full_dt[,c(3,2)]
+length(unique(kegg_full_dt$to.y))
+```
+
+
+
+```{r}
+## GSEA analysis
+fc.kegg.p <- gage(fc_new, gsets = kegg.sets.hsa, ref = NULL, samp = NULL, rank.test = TRUE)
+
+upreg <- data.frame(fc.kegg.p[[1]]) %>%
+  rownames_to_column(var = "pathway") %>%
+  mutate(KEGGpathway = substr(pathway, start = 1, stop = 8)) %>%
+  mutate(pathwayname = word(pathway, 2, -1)) %>%
+  select(pathway, KEGGpathway, pathwayname, set.size, stat.mean, p.val, q.val) %>%
+  mutate(pathid = substr(KEGGpathway, start = 4, stop = 8))
+upreg_selected = upreg %>%
+  filter(q.val < 0.05) %>%
+  filter(set.size >= 5)
+upreg_selected$neglogP_Value = -log10(upreg_selected$p.val)
+upreg_selected$neglogQ_value = -log10(upreg_selected$q.val)
+
+downreg <- data.frame(fc.kegg.p[[2]]) %>%
+  rownames_to_column(var = "pathway") %>%
+  mutate(KEGGpathway = substr(pathway, start = 1, stop = 8)) %>%
+  mutate(pathwayname = word(pathway, 2, -1)) %>%
+  select(pathway, KEGGpathway, pathwayname, set.size, stat.mean, p.val, q.val) %>%
+  mutate(pathid = substr(KEGGpathway, start = 4, stop = 8))
+downreg_selected = downreg %>%
+  filter(q.val < 0.05) %>%
+  filter(set.size >= 5)
+downreg_selected$neglogP_Value = -log10(downreg_selected$p.val)
+downreg_selected$neglogQ_value = -log10(downreg_selected$q.val)
+
+
+both = rbind(downreg_selected, upreg_selected)
+both$absolute = abs(both$stat.mean)
+#datatable(both)
+both2 = both %>% filter(pathwayname != "Metabolic pathways" & pathwayname != "Retrograde endocannabinoid signaling")
+both2=both2[-grep("disease",both2$pathway),]
+both2[,c(5:7,9:11)]=round(both2[,c(5:7,9:11)],4)
+datatable(both2)
+#saveRDS(both, file = "both_selected.rds")
+
+# pv.out.list.fat <- sapply(both2$pathid[1:2],
+#                               function(pid) pathview(gene.data =  fc_new,
+#                                                     pathway.id = pid,
+#                                                     species = "hsa",
+#                                                     out.suffix="human",
+#                                                     low = list(gene = "deepskyblue1", cpd = "green"),
+#                                                     high = list(gene = "red", cpd = "yellow")))
+
+library(ggrepel )
+ggplot(both2, aes(x = stat.mean, y = -log10(p.val))) + geom_point( aes(color = set.size), size = 3) + labs(x = "Enrichment score", y = "neglog10p", title = "GSEA for significantly downregulated and upregulated pathways") + 
+  geom_text_repel(aes(label=pathwayname), size=3) +
+  scale_colour_gradient(high = "red", low = "blue") +
+  scale_x_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+
+ggplot(both2,aes(x = reorder(pathwayname, stat.mean),y=stat.mean))+geom_point(aes(color=-log10(p.val),size=-log10(p.val)))+coord_flip()+theme_bw()+ggtitle("GSEA for significantly downregulated and upregulated pathways")+labs(y="Enrichment score")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+KEGG_namelist=both2$pathwayname
+```
+
+## Part(1) {.tabset .tabset-fade .tabset-pills}
+
+
+### Part(1) KEGG+mito
+* combine the pathways together to do the gsea analysis
+* full pathway table
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+performGSEA_mito <- function(gene_list,gene.pathway,pval){
+  # gse <- GSEA(gene_list, 
+  #           TERM2GENE = gene.pathway,
+  #           pAdjustMethod = "none", 
+  #           scoreType = "pos",
+  #           nPermSimple = 10000
+  #           )
+  gse <- GSEA(gene_list, TERM2GENE = gene.pathway,nPerm = 1000, minGSSize = 5, maxGSSize = 500, pAdjustMethod = "BH",pvalueCutoff = pval)
+  GSEresults.rounded <- gse@result[,1:9]
+  GSEresults.rounded[,4:8] <- signif(GSEresults.rounded[,4:8],4)
+  GSEresults.rounded[,6:7] <- sapply(GSEresults.rounded[,6:7], format, scientific = TRUE)
+  table <- DT::datatable(GSEresults.rounded)
+  dot <- clusterProfiler::dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+  gse <- enrichplot::pairwise_termsim(gse)
+  enrich <- emapplot(gse, showCategory = 10)
+  tree <- treeplot(gse) #https://github.com/YuLab-SMU/ggtree/issues/399 #might be a dplyr issue
+  return(list(table = table, dot = dot, enrich = enrich, tree = tree,table2=GSEresults.rounded))
+}
+
+###
+mito_genes <- read_excel("Human.MitoCarta3.0.xls", sheet = 4)
+mito_genes <- mito_genes %>% dplyr::select(MitoPathway,Genes) %>% na.omit
+gene_sets <- mito_genes$Genes %>% strsplit(", ")
+gene.pathway <- data.frame(geneIDs = character(), pathwayIDs = integer())
+for(i in 1:length(gene_sets)){
+  new_data <- data.frame(geneIDs = gene_sets[[i]], pathwayIDs = i)
+  gene.pathway <- rbind(gene.pathway,new_data)
+}
+
+gene.pathway$geneIDs <- mapIds(org.Hs.eg.db, keys = gene.pathway$geneIDs, keytype = "SYMBOL", column = "ENTREZID")
+pathway.names <- data.frame(pathwayIDs = 1:length(gene_sets), pathwayNames = mito_genes$MitoPathway)
+####
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+gene.pathway2=gene.pathway
+gene.pathway2$pathwayIDs=pathway.names$pathwayNames[match(gene.pathway2$pathwayIDs,pathway.names$pathwayIDs)]
+gene.pathway2=gene.pathway2[,c(2,1)]#need to put term gene in order
+
+##Ben's mito to delete unused previous mito pathways
+ben_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-DM paper figure 3a mitochondrial pathway list.xlsx")
+ben_mito$Description%in%gene.pathway2$pathwayIDs
+deletion_index=which(!gene.pathway2$pathwayIDs%in%ben_mito$Description)
+dim(gene.pathway2)
+gene.pathway2=gene.pathway2[-deletion_index,]
+dim(gene.pathway2)
+###
+
+#KEGGresult_path_dt3 is the old one
+colnames(kegg_full_dt)=colnames(gene.pathway2)
+gene.pathway3=rbind.data.frame(gene.pathway2,kegg_full_dt)
+set.seed(202205)
+gseaResults_mito <-performGSEA_mito(gene_list,gene.pathway3,0.05)
+gseaResults_mito$table
+#gseaResults_mito$dot
+#gseaResults_mito$enrich
+#gseaResults_mito$tree
+
+#Normalized enrichment scores (NES)
+#https://www.biostars.org/p/169648/
+
+```
+
+* pathway enrichment plot
+```{r}
+#my plot
+ggplotdt=gseaResults_mito$table2
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub[1:10,],ggplotdtdownsub[1:10,])
+ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+
+ihddm_topnames=ggplotdt$Description
+ihddm_dt=gseaResults_mito$table2
+```
+
+* z test for testing the proportion
+```{r}
+paste("proportion of mito pathways in all pathways used",dim(gene.pathway2)[1]/dim(gene.pathway3)[1])
+paste("proportion of significant mito pathways in all significant pathways with threshold 0.05 is",sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description)/nrow(gseaResults_mito$table2))
+
+#one proportion z test, h0:p>p0
+
+paste("perform statistical test to see if this is come up by chance: one-proportion z-test for greater shows:")
+prop.test(x =sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description) , n = nrow(gseaResults_mito$table2), p = dim(gene.pathway2)[1]/dim(gene.pathway3)[1], correct = FALSE,
+              alternative = "greater")
+sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description) 
+nrow(gseaResults_mito$table2)
+```
+
+* Part(2) for plotting all enriched mito pathways
+```{r}
+#plot all the significant mito pathways
+ggplotdt2=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+ggplotdt2=ggplotdt2[ggplotdt2$Description%in%gene.pathway2$pathwayIDs,]
+ggplot(ggplotdt2,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("mitochondrail pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+ylim(c(-1,1))
+```
+
+### KEGG+mito relax threshold for the figure
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+performGSEA_mito <- function(gene_list,gene.pathway,pval){
+  # gse <- GSEA(gene_list, 
+  #           TERM2GENE = gene.pathway,
+  #           pAdjustMethod = "none", 
+  #           scoreType = "pos",
+  #           nPermSimple = 10000
+  #           )
+  gse <- GSEA(gene_list, TERM2GENE = gene.pathway,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = pval)
+  GSEresults.rounded <- gse@result[,1:9]
+  GSEresults.rounded[,4:8] <- signif(GSEresults.rounded[,4:8],4)
+  GSEresults.rounded[,6:7] <- sapply(GSEresults.rounded[,6:7], format, scientific = TRUE)
+  table <- DT::datatable(GSEresults.rounded)
+  dot <- clusterProfiler::dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+  gse <- enrichplot::pairwise_termsim(gse)
+  enrich <- emapplot(gse, showCategory = 10)
+  tree <- treeplot(gse) #https://github.com/YuLab-SMU/ggtree/issues/399 #might be a dplyr issue
+  return(list(table = table, dot = dot, enrich = enrich, tree = tree,table2=GSEresults.rounded))
+}
+
+###
+mito_genes <- read_excel("Human.MitoCarta3.0.xls", sheet = 4)
+mito_genes <- mito_genes %>% dplyr::select(MitoPathway,Genes) %>% na.omit
+gene_sets <- mito_genes$Genes %>% strsplit(", ")
+gene.pathway <- data.frame(geneIDs = character(), pathwayIDs = integer())
+for(i in 1:length(gene_sets)){
+  new_data <- data.frame(geneIDs = gene_sets[[i]], pathwayIDs = i)
+  gene.pathway <- rbind(gene.pathway,new_data)
+}
+
+gene.pathway$geneIDs <- mapIds(org.Hs.eg.db, keys = gene.pathway$geneIDs, keytype = "SYMBOL", column = "ENTREZID")
+pathway.names <- data.frame(pathwayIDs = 1:length(gene_sets), pathwayNames = mito_genes$MitoPathway)
+####
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+gene.pathway2=gene.pathway
+gene.pathway2$pathwayIDs=pathway.names$pathwayNames[match(gene.pathway2$pathwayIDs,pathway.names$pathwayIDs)]
+gene.pathway2=gene.pathway2[,c(2,1)]#need to put term gene in order
+
+##Ben's mito to delete unused previous mito pathways
+ben_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-noDM vs donor KEGG mito pathways 27.6.22.xlsx")
+ben_mito$Description%in%gene.pathway2$pathwayIDs
+deletion_index=which(!gene.pathway2$pathwayIDs%in%ben_mito$Description)
+dim(gene.pathway2)
+gene.pathway2=gene.pathway2[-deletion_index,]
+dim(gene.pathway2)
+###
+
+
+colnames(kegg_full_dt)=colnames(gene.pathway2)
+gene.pathway3=rbind.data.frame(gene.pathway2,kegg_full_dt)
+set.seed(202205)
+gseaResults_mito <-performGSEA_mito(gene_list,gene.pathway3,0.05)
+
+#my plot
+ggplotdt=gseaResults_mito$table2
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(ggplotdtup$p.adjust),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$p.adjust),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub[1:10,],ggplotdtdownsub[1:10,])
+
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 10))
+
+gg
+
+ihddm_topnames2=ggplotdt$Description
+ihddm_dt2=gseaResults_mito$table2
+datatable(ihddm_dt2%>% mutate_if(is.numeric, ~round(., 3)))
+```
+
+
+
+# IHD-NO DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+## DE analysis and standard pipeline
+
+```{r}
+load("all_omics_lv_v5.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="IHD"&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+ihddt=infodt1[infodt1$ihd!=2,]
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=47)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+protein_expression2=protein_expression2[,colnames(protein_expression2)%in%indexx]
+dim(protein_expression2)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=protein_expression2[,union(grep("_IHD_No",colnames(protein_expression2)),grep("Donor_No",colnames(protein_expression2)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("IHD",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    # g1=ggplot2::ggplot(df1, aes(logFC,neglogP_value,label=name))+
+    #   geom_point(size = 1, alpha=1) +
+    #   xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+    #   theme_bw(base_size = 16) +
+    #   geom_hline(yintercept = 1.3, linetype = "dashed", colour = "brown3")+theme(aspect.ratio = 1)
+    
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-NO DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+ggplotly(g1)
+df1[,c(2:7,9)]=round(df1[,c(2:7,9)],4)
+datatable(df1)
+
+#pathway analysis
+#pathway analysis as in our shiny:delete missing values
+experiment_data_pathway=na.omit(experiment_data_noimputation)
+dim(experiment_data_pathway)
+    
+##With voom for finding pathways
+groupname<-as.factor(experiment_data_noimputation1$y)
+design <- model.matrix(~ groupname + 0)
+log2.cpm <- voom(experiment_data_pathway, design, normalize.method = "quantile")
+fit <- lmFit(log2.cpm, design)
+cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+limma.res=topTable(fit2,n=Inf,sort="p", adjust.method = "fdr")
+fc_new <- limma.res$logFC
+limma.res$entrez = mapIds(org.Hs.eg.db,
+                     keys=row.names(limma.res), 
+                     column="ENTREZID",
+                     keytype=keytypes(org.Hs.eg.db)[2],
+                     multiVals="first")
+names(fc_new) <- limma.res$entrez
+
+geneList<-na.omit(fc_new)
+geneList = sort(geneList, decreasing = TRUE)
+kk2 <- gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 100,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.05,
+              verbose      = FALSE)
+kk2_dt=as.data.frame(kk2)
+kk2_dt[,c(4,5,7,8)]=round(kk2_dt[,c(4,5,7,8)],4)
+datatable(kk2_dt)
+clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+BP_namelist=kk2_dt$Description
+#https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html
+#gene ontology over-representation test
+ego2 <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+ego2_dt=as.data.frame(ego2)
+ego2_dt[,5:7]=round(ego2_dt[,5:7],4)
+datatable(ego2_dt)
+
+
+# Let is suppose I have a collection of genesets called : HALLMARK Now let is suppose there is a specific geneset there called: E2F_targets
+# 
+# BgRatio, M/N.
+# 
+# M = size of the geneset (eg size of the E2F_targets); (is the number of genes within that distribution that are annotated (either directly or indirectly) to the node of interest).
+# 
+# N = size of all of the unique genes in the collection of genesets (example the HALLMARK collection); (is the total number of genes in the background distribution (universe)
+# 
+# GeneRatio is k/n.
+# 
+# k = size of the overlap of 'a vector of gene id' you input with the specific geneset (eg E2F_targets), only unique genes; (the number of genes within that list n, which are annotated to the node.
+# 
+# n = size of the overlap of 'a vector of gene id' you input with all the members of the collection of genesets (eg the HALLMARK collection),only unique genes; is the size of the list of genes of interest
+
+#adj pval and qval
+#https://support.bioconductor.org/p/96329/
+#adj pval is the fdr adjusted pval, qval from another package is another adjustment method
+#the BH approach is slightly more conservative than qvalue
+
+
+#get pathway maps
+result_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+result_path_dt=as.data.frame(result_path)
+result_path_dt2=result_path_dt[,c("Description","geneID")]
+
+result_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+result_path_dt3=rbind(result_path_dt3,dt)
+}
+```
+
+
+```{r}
+kk3 <- gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "MF",
+              minGSSize    = 100,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.05,
+              verbose      = FALSE)
+kk3_dt=as.data.frame(kk3)
+kk3_dt[,c(4,5,7,8)]=round(kk3_dt[,c(4,5,7,8)],4)
+datatable(as.data.frame(kk3_dt))
+clusterProfiler::dotplot(kk3, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+#https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html
+#gene ontology over-representation test
+ego3 <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+ego3_dt=as.data.frame(ego3)
+ego3_dt[,5:7]=round(ego3_dt[,5:7],4)
+datatable(as.data.frame(ego3_dt))
+
+MF_namelist=kk3_dt$Description
+
+#get pathway maps
+MFresult_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+MFresult_path_dt=as.data.frame(MFresult_path)
+MFresult_path_dt2=MFresult_path_dt[,c("Description","geneID")]
+
+MFresult_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(MFresult_path_dt2)){
+X2=unlist(strsplit(MFresult_path_dt2$geneID[i],"/"))
+X1=rep(MFresult_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+MFresult_path_dt3=rbind(MFresult_path_dt3,dt)
+}
+```
+
+## check list for ecm & scm gene groups
+```{r}
+
+#new things 20220907: add customised pathway analysis results
+name=c("GO:0030198","GO:0055007","GO:0030239","GO:0060047","GO:0007010","GO:0031012","GO:0043292","GO:0005856")
+AnnotationDbi::select(GO.db, keys=name, columns=c("TERM","ONTOLOGY"), keytype="GOID")
+
+pathwayIDs=c("extracellular matrix organization","cardiac muscle cell differentiation", "myofibril assembly", "heart contraction" ,"cytoskeleton organization","extracellular matrix"  ,"contractile fiber", "cytoskeleton")
+
+all_name=c(name,GOBPOFFSPRING[["GO:0030198"]],GOBPOFFSPRING[["GO:0055007"]],GOBPOFFSPRING[["GO:0030239"]],GOBPOFFSPRING[["GO:0060047"]],GOBPOFFSPRING[["GO:0007010"]],GOCCOFFSPRING[["GO:0031012"]],GOCCOFFSPRING[["GO:0043292"]],GOCCOFFSPRING[["GO:0005856"]])
+
+all_name2=AnnotationDbi::select(GO.db, keys=all_name, columns=c("TERM","ONTOLOGY"), keytype="GOID")
+
+
+GO_v<- AnnotationDbi::select(org.Hs.eg.db, keys=all_name2$GOID, columns=c("GO","ONTOLOGY","SYMBOL","ENTREZID"),keytype="GO")
+
+pp2=merge(all_name2,GO_v,by.x="GOID",by.y="GO",all=TRUE)
+datatable(pp2%>%group_by(GOID)%>%summarise(n=n()))
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+pathway_list3=pp2[,c("TERM","ENTREZID")]
+colnames(pathway_list3)=c("pathwayIDs","geneIDs")
+sum(names(gene_list)%in% pathway_list3$geneIDs)
+sum(!names(gene_list)%in% pathway_list3$geneIDs)
+length(gene_list)
+#pathway_list3%>%group_by(pathwayIDs)%>%summarise(n=n())
+
+set.seed(20220907)
+gse <- GSEA(gene_list, TERM2GENE = pathway_list3,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = 0.05)
+figure4b=as.data.frame(gse)
+figure4bv2=figure4b
+figure4bv2[,4:9]=round(figure4bv2[,4:9],3)
+datatable(figure4bv2)
+```
+
+
+
+```{r eval=FALSE}
+#new things 20220905: add customised pathway analysis results
+name=c("GO:0030198","GO:0055007","GO:0030239","GO:0060047","GO:0007010","GO:0031012","GO:0043292","GO:0005856")
+#get pathway maps
+
+result_path <- enrichGO(gene         = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENTREZID',
+                ont           = "BP",
+                pAdjustMethod = "none",
+                pvalueCutoff  =1,
+                qvalueCutoff  =1)
+result_path_dt=as.data.frame(result_path)
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)#about 200 enrichgo not in gsego
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+# "GO:0007010"%in%result_path_dt2$ID
+# "biological process"%in%result_path_dt2$Description
+# "cellular process"%in%result_path_dt2$Description
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+BP_result=gse_dt3
+"GO:0007010"%in%BP_result$X3
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "MF",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+MF_result=gse_dt3
+
+gse_result=gseGO(geneList     = geneList,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "CC",
+              minGSSize    = 3,
+              maxGSSize    = 500,
+              pvalueCutoff = 1,
+      pAdjustMethod = "none",
+              verbose      = FALSE)
+gse_result2=as.data.frame(gse_result)
+
+result_path_dt=gse_result2
+result_path_dt2=result_path_dt[,c("Description","core_enrichment","ID")]
+colnames(result_path_dt2)=c("Description","geneID","ID")
+
+gse_dt3=data.frame(matrix(ncol=3))
+for(i in 1:nrow(result_path_dt2)){
+X2=unlist(strsplit(result_path_dt2$geneID[i],"/"))
+X1=rep(result_path_dt2$Description[i],length(X2))
+X3=rep(result_path_dt2$ID[i],length(X2))
+dt=cbind(X3,X1,X2)
+gse_dt3=rbind(gse_dt3,dt)
+}
+CC_result=gse_dt3
+
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+
+pathway_list=rbind.data.frame(BP_result,MF_result,CC_result)
+colnames(pathway_list)=c("pathwayIDs","geneIDs","GOID")
+pathway_list2=pathway_list[pathway_list$GOID%in%name,]
+pathway_list3=pathway_list2[,1:2]
+set.seed(20220905)
+gse <- GSEA(gene_list, TERM2GENE = pathway_list3,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = 0.05)
+figure4b=as.data.frame(gse)
+```
+
+## continue for DE analysis and standard pipeline
+```{r}
+kegg_gene_list<-na.omit(fc_new)
+kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+set.seed(202205)
+kk2 <- gseKEGG(geneList     = kegg_gene_list,
+               organism     = "hsa",
+               nPerm        = 10000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "BH",
+               keyType       = "ncbi-geneid")
+datatable(as.data.frame(kk2))
+clusterProfiler::dotplot(kk2, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+both2=as.data.frame(kk2)
+both2=both2[-grep("disease",both2$Description),]
+ggplot(both2,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("GSEA for significantly downregulated and upregulated pathways")+labs(y="Enrichment score")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+#get pathway maps
+KEGGresult_path <- enrichKEGG(gene         = names(geneList),
+              organism = "hsa", keyType = "kegg", pvalueCutoff = 1, pAdjustMethod = "BH",minGSSize = 0, maxGSSize = 3000, qvalueCutoff = 1)
+KEGGresult_path_dt=as.data.frame(KEGGresult_path)
+KEGGresult_path_dt2=KEGGresult_path_dt[,c("Description","geneID")]
+
+KEGGresult_path_dt2=KEGGresult_path_dt2[-grep("disease",KEGGresult_path_dt2$Description),]
+
+KEGGresult_path_dt3=data.frame(matrix(ncol=2))
+for(i in 1:nrow(KEGGresult_path_dt2)){
+X2=unlist(strsplit(KEGGresult_path_dt2$geneID[i],"/"))
+X1=rep(KEGGresult_path_dt2$Description[i],length(X2))
+dt=cbind(X1,X2)
+KEGGresult_path_dt3=rbind(KEGGresult_path_dt3,dt)
+}
+```
+
+
+
+```{r}
+## GSEA analysis
+fc.kegg.p <- gage(fc_new, gsets = kegg.sets.hsa, ref = NULL, samp = NULL, rank.test = TRUE)
+
+upreg <- data.frame(fc.kegg.p[[1]]) %>%
+  rownames_to_column(var = "pathway") %>%
+  mutate(KEGGpathway = substr(pathway, start = 1, stop = 8)) %>%
+  mutate(pathwayname = word(pathway, 2, -1)) %>%
+  select(pathway, KEGGpathway, pathwayname, set.size, stat.mean, p.val, q.val) %>%
+  mutate(pathid = substr(KEGGpathway, start = 4, stop = 8))
+upreg_selected = upreg %>%
+  filter(q.val < 0.05) %>%
+  filter(set.size >= 5)
+upreg_selected$neglogP_Value = -log10(upreg_selected$p.val)
+upreg_selected$neglogQ_value = -log10(upreg_selected$q.val)
+
+downreg <- data.frame(fc.kegg.p[[2]]) %>%
+  rownames_to_column(var = "pathway") %>%
+  mutate(KEGGpathway = substr(pathway, start = 1, stop = 8)) %>%
+  mutate(pathwayname = word(pathway, 2, -1)) %>%
+  select(pathway, KEGGpathway, pathwayname, set.size, stat.mean, p.val, q.val) %>%
+  mutate(pathid = substr(KEGGpathway, start = 4, stop = 8))
+downreg_selected = downreg %>%
+  filter(q.val < 0.05) %>%
+  filter(set.size >= 5)
+downreg_selected$neglogP_Value = -log10(downreg_selected$p.val)
+downreg_selected$neglogQ_value = -log10(downreg_selected$q.val)
+
+
+both = rbind(downreg_selected, upreg_selected)
+both$absolute = abs(both$stat.mean)
+#datatable(both)
+both2 = both %>% filter(pathwayname != "Metabolic pathways" & pathwayname != "Retrograde endocannabinoid signaling")
+both2=both2[-grep("disease",both2$pathway),]
+both2[,c(5:7,9:11)]=round(both2[,c(5:7,9:11)],4)
+datatable(both2)
+#saveRDS(both, file = "both_selected.rds")
+
+# pv.out.list.fat <- sapply(both$pathid,
+#                               function(pid) pathview(gene.data =  fc,
+#                                                     pathway.id = pid,
+#                                                     species = "hsa",
+#                                                     out.suffix="human",
+#                                                     low = list(gene = "deepskyblue1", cpd = "green"),
+#                                                     high = list(gene = "red", cpd = "yellow")))
+
+# library(ggrepel )
+# ggplot(both2, aes(x = stat.mean, y = -log10(p.val))) + geom_point( aes(color = set.size), size = 3) + labs(x = "Enrichment score", y = "neglog10p", title = "GSEA for significantly downregulated and upregulated pathways") + 
+#   geom_text_repel(aes(label=pathwayname), size=3) +
+#   scale_colour_gradient(high = "red", low = "blue") +
+#   scale_x_continuous(
+#   labels = scales::number_format(accuracy = 0.01))
+
+ggplot(both2,aes(x = reorder(pathwayname, stat.mean),y=stat.mean))+geom_point(aes(color=-log10(p.val),size=-log10(p.val)))+coord_flip()+theme_bw()+ggtitle("GSEA for significantly downregulated and upregulated pathways")+labs(y="Enrichment score")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+KEGG_namelist=both2$pathwayname
+```
+
+## Part(1) {.tabset .tabset-fade .tabset-pills}
+
+
+### Part(1) KEGG+mito
+* combine the pathways together to do the gsea analysis
+* pathway table
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+performGSEA_mito <- function(gene_list,gene.pathway,pval){
+  # gse <- GSEA(gene_list, 
+  #           TERM2GENE = gene.pathway,
+  #           pAdjustMethod = "none", 
+  #           scoreType = "pos",
+  #           nPermSimple = 10000
+  #           )
+  gse <- GSEA(gene_list, TERM2GENE = gene.pathway,nPerm = 1000, minGSSize = 5, maxGSSize = 500, pAdjustMethod = "BH",pvalueCutoff = pval)
+  GSEresults.rounded <- gse@result[,1:9]
+  GSEresults.rounded[,4:8] <- signif(GSEresults.rounded[,4:8],4)
+  GSEresults.rounded[,6:7] <- sapply(GSEresults.rounded[,6:7], format, scientific = TRUE)
+  table <- DT::datatable(GSEresults.rounded)
+  dot <- clusterProfiler::dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+  gse <- enrichplot::pairwise_termsim(gse)
+  enrich <- emapplot(gse, showCategory = 10)
+  tree <- treeplot(gse) #https://github.com/YuLab-SMU/ggtree/issues/399 #might be a dplyr issue
+  return(list(table = table, dot = dot, enrich = enrich, tree = tree,table2=GSEresults.rounded))
+}
+
+###
+mito_genes <- read_excel("Human.MitoCarta3.0.xls", sheet = 4)
+mito_genes <- mito_genes %>% dplyr::select(MitoPathway,Genes) %>% na.omit
+gene_sets <- mito_genes$Genes %>% strsplit(", ")
+gene.pathway <- data.frame(geneIDs = character(), pathwayIDs = integer())
+for(i in 1:length(gene_sets)){
+  new_data <- data.frame(geneIDs = gene_sets[[i]], pathwayIDs = i)
+  gene.pathway <- rbind(gene.pathway,new_data)
+}
+
+gene.pathway$geneIDs <- mapIds(org.Hs.eg.db, keys = gene.pathway$geneIDs, keytype = "SYMBOL", column = "ENTREZID")
+pathway.names <- data.frame(pathwayIDs = 1:length(gene_sets), pathwayNames = mito_genes$MitoPathway)
+####
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+gene.pathway2=gene.pathway
+gene.pathway2$pathwayIDs=pathway.names$pathwayNames[match(gene.pathway2$pathwayIDs,pathway.names$pathwayIDs)]
+gene.pathway2=gene.pathway2[,c(2,1)]#need to put term gene in order
+
+##Ben's mito to delete unused previous mito pathways
+ben_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-noDM vs donor KEGG mito pathways 27.6.22.xlsx")
+ben_mito$Description%in%gene.pathway2$pathwayIDs
+deletion_index=which(!gene.pathway2$pathwayIDs%in%ben_mito$Description)
+dim(gene.pathway2)
+gene.pathway2=gene.pathway2[-deletion_index,]
+dim(gene.pathway2)
+###
+
+
+colnames(kegg_full_dt)=colnames(gene.pathway2)
+gene.pathway3=rbind.data.frame(gene.pathway2,kegg_full_dt)
+set.seed(202205)
+gseaResults_mito <-performGSEA_mito(gene_list,gene.pathway3,0.1)
+gseaResults_mito$table
+#gseaResults_mito$dot
+#gseaResults_mito$enrich
+#gseaResults_mito$tree
+
+#Normalized enrichment scores (NES)
+#https://www.biostars.org/p/169648/
+
+```
+
+* pathway plot
+```{r}
+#my plot
+ggplotdt=gseaResults_mito$table2
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub[1:2,],ggplotdtdownsub[1:10,])
+
+ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")
+
+
+sum(unique(gene.pathway2$pathwayIDs)%in% ggplotdt$Description)/nrow(ggplotdt)
+
+ihdnodm_topnames=ggplotdt$Description
+ihdnodm_dt=gseaResults_mito$table2
+```
+
+* test for proportion
+```{r}
+paste("proportion of mito pathways in all pathways used",dim(gene.pathway2)[1]/dim(gene.pathway3)[1])
+paste("proportion of significant mito pathways in all significant pathways with threshold 0.05 is",sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description)/nrow(gseaResults_mito$table2))
+
+#one proportion z test, h0:p>p0
+
+paste("perform statistical test to see if this is come up by chance: one-proportion z-test for greater shows:")
+prop.test(x =sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description) , n = nrow(gseaResults_mito$table2), p = dim(gene.pathway2)[1]/dim(gene.pathway3)[1], correct = FALSE,
+              alternative = "greater")
+sum(unique(gene.pathway2$pathwayIDs)%in% gseaResults_mito$table2$Description) 
+nrow(gseaResults_mito$table2)
+```
+
+* Part(2) for plotting enriched mito pathways
+```{r}
+#plot all the significant mito pathways
+ggplotdt2=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+ggplotdt2=ggplotdt2[ggplotdt2$Description%in%gene.pathway2$pathwayIDs,]
+ggplot(ggplotdt2,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=p.adjust,size=p.adjust))+coord_flip()+theme_bw()+ggtitle("mitochondrail pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+ylim(c(-1,1))
+```
+
+
+### Part(1) KEGG+mito threshold relax for our figure
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+performGSEA_mito <- function(gene_list,gene.pathway,pval){
+  # gse <- GSEA(gene_list, 
+  #           TERM2GENE = gene.pathway,
+  #           pAdjustMethod = "none", 
+  #           scoreType = "pos",
+  #           nPermSimple = 10000
+  #           )
+  gse <- GSEA(gene_list, TERM2GENE = gene.pathway,nPerm = 1000, minGSSize = 3, maxGSSize = 500, pAdjustMethod = "none",pvalueCutoff = pval)
+  GSEresults.rounded <- gse@result[,1:9]
+  GSEresults.rounded[,4:8] <- signif(GSEresults.rounded[,4:8],4)
+  GSEresults.rounded[,6:7] <- sapply(GSEresults.rounded[,6:7], format, scientific = TRUE)
+  table <- DT::datatable(GSEresults.rounded)
+  dot <- clusterProfiler::dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+  gse <- enrichplot::pairwise_termsim(gse)
+  enrich <- emapplot(gse, showCategory = 10)
+  tree <- treeplot(gse) #https://github.com/YuLab-SMU/ggtree/issues/399 #might be a dplyr issue
+  return(list(table = table, dot = dot, enrich = enrich, tree = tree,table2=GSEresults.rounded))
+}
+
+###
+mito_genes <- read_excel("Human.MitoCarta3.0.xls", sheet = 4)
+mito_genes <- mito_genes %>% dplyr::select(MitoPathway,Genes) %>% na.omit
+gene_sets <- mito_genes$Genes %>% strsplit(", ")
+gene.pathway <- data.frame(geneIDs = character(), pathwayIDs = integer())
+for(i in 1:length(gene_sets)){
+  new_data <- data.frame(geneIDs = gene_sets[[i]], pathwayIDs = i)
+  gene.pathway <- rbind(gene.pathway,new_data)
+}
+
+gene.pathway$geneIDs <- mapIds(org.Hs.eg.db, keys = gene.pathway$geneIDs, keytype = "SYMBOL", column = "ENTREZID")
+pathway.names <- data.frame(pathwayIDs = 1:length(gene_sets), pathwayNames = mito_genes$MitoPathway)
+####
+
+gene_list = sort(fc_new, decreasing = TRUE)
+names(gene_list)=as.character(names(gene_list))
+
+gene.pathway2=gene.pathway
+gene.pathway2$pathwayIDs=pathway.names$pathwayNames[match(gene.pathway2$pathwayIDs,pathway.names$pathwayIDs)]
+gene.pathway2=gene.pathway2[,c(2,1)]#need to put term gene in order
+
+##Ben's mito to delete unused previous mito pathways
+ben_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-noDM vs donor KEGG mito pathways 27.6.22.xlsx")
+ben_mito$Description%in%gene.pathway2$pathwayIDs
+deletion_index=which(!gene.pathway2$pathwayIDs%in%ben_mito$Description)
+dim(gene.pathway2)
+gene.pathway2=gene.pathway2[-deletion_index,]
+dim(gene.pathway2)
+###
+
+
+colnames(kegg_full_dt)=colnames(gene.pathway2)
+gene.pathway3=rbind.data.frame(gene.pathway2,kegg_full_dt)
+set.seed(202205)
+gseaResults_mito <-performGSEA_mito(gene_list,gene.pathway3,0.05)
+
+ggplotdt=gseaResults_mito$table2
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(ggplotdtup$p.adjust),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$p.adjust),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub[1:10,],ggplotdtdownsub[1:10,])
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 10))
+
+gg
+ihdnodm_topnames2=ggplotdt$Description
+ihdnodm_dt2=gseaResults_mito$table2
+datatable(ihdnodm_dt2%>% mutate_if(is.numeric, ~round(., 3)))
+```
+
+
+
+# Figure3A
+```{r}
+dim(ihddm_dt2)
+dim(ihdnodm_dt2)
+common_name=c(ihddm_dt2$Description,ihdnodm_dt2$Description)
+plotmerge=merge(ihddm_dt2,ihdnodm_dt2,by="Description")
+plotmerge$pvalue.x=-log10(as.numeric(plotmerge$pvalue.x))
+plotmerge$pvalue.y=-log10(as.numeric(plotmerge$pvalue.y))
+annotation=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-DM paper figure 3a pathways to annotate.xlsx")
+plotmerge$mito=as.character(ifelse(plotmerge$Description%in% ben_mito$Description,1,0))
+plotmerge$annotation=as.character(ifelse(plotmerge$Description%in% annotation$`Amino acid metabolism`,1,0))
+ggplotly(ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description,color=mito))+geom_point()+ggtitle("kegg+mito pathways ihd-dm vs ihd-no dm")+xlab("neg_log10_pval in ind-dm vs donor")+ylab("neg_log10_pval in ind-no dm vs donor")+theme_bw())
+
+library(ggrepel)
+#gg=ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description,color=mito))+geom_point()+ geom_text_repel(aes(x=pvalue.x,y=pvalue.y,label=Description),subset(plotmerge,((pvalue.x>1&pvalue.y<2)|(pvalue.x<1&pvalue.y>1)|(pvalue.x>2&pvalue.y>2))), size=3)+ggtitle("kegg+mito pathways ihd-dm vs ihd-no dm")+xlab("neg_log10_pval in ind-dm vs donor")+ylab("neg_log10_pval in ind-no dm vs donor")+ scale_color_manual(values=c("black", "seagreen"))+theme_bw()
+gg=ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description,color=mito))+geom_point()+ geom_text_repel(aes(x=pvalue.x,y=pvalue.y,label=Description),subset(plotmerge,plotmerge$annotation==1), size=3)+ggtitle("kegg+mito pathways ihd-dm vs ihd-no dm")+xlab("neg_log10_pval in ind-dm vs donor")+ylab("neg_log10_pval in ind-no dm vs donor")+ scale_color_manual(values=c("black", "seagreen"))+theme_bw()+theme(aspect.ratio = 1)
+gg
+#ggsave(filename="figure3a.pdf",gg,height = 10,width = 10)
+```
+
+
+
+
+# Figure3C
+
+
+```{r}
+selected_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/Figure 3c and d IHD-DM and IHD-No DM final pathways to plot_230224.xlsx",sheet = 1)
+
+names=selected_mito$ID
+ggplotdt=ihddm_dt2[ihddm_dt2$Description%in%names,]
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "blue", low = "red")+theme(text = element_text(size = 20))+guides(size = guide_legend(reverse=TRUE))+scale_size_continuous(trans = "reverse")
+
+gg
+#ggsave("figure3c.pdf",plot = gg,height = 10,width = 10)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue),size=5)+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))
+gg
+#ggsave("figure3cv1.pdf",plot = gg,height = 10,width = 10)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue),size=5)+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue",limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))+theme(text = element_text(size = 20))
+gg
+```
+
+
+
+# Figure3D
+```{r}
+selected_mito=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/Figure 3c and d IHD-DM and IHD-No DM final pathways to plot_230224.xlsx",sheet = 2)
+
+names=selected_mito$ID
+ggplotdt=ihdnodm_dt2[ihdnodm_dt2$Description%in%names,]
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "blue", low = "red")+theme(text = element_text(size = 20))+guides(size = guide_legend(reverse=TRUE))+scale_size_continuous(trans = "reverse")
+
+gg
+#ggsave("figure3d.pdf",plot = gg,height = 7,width = 10)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue),size=5)+coord_flip()+theme_bw()+ggtitle("ihd-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))
+gg
+#ggsave("figure3dv1.pdf",plot = gg,height = 7,width = 10)
+```
+
+
+
+# Figure3e
+* this plot the scm and ecm pathways for ihd-dm vs donor
+```{r}
+
+names=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/Figure 3e and f GO nodes 27.2.23.xlsx",sheet = 1,col_names=TRUE)
+names=as.data.frame(names)
+ggplotdt=figure4a[figure4a$Description%in%as.vector(names[,1]),]
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue),size=5)+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))
+gg
+#ggsave("figure4av1.pdf",plot = gg,height = 7,width = 10)
+
+ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))+guides(size = guide_legend(reverse=TRUE))+scale_size_continuous(range=c(1,10),breaks = c(0.01,0.05,0.1,0.5,1),limits = c(0,1))
+
+ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))+scale_size_continuous(range=c(1,10),breaks = c(0.01,0.05,0.1,0.5,1),limits = c(0,1))
+
+ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))+guides(size = guide_legend(reverse=TRUE))+scale_size_continuous(range=c(1,6),breaks = c(0,0.01,0.05,0.1,0.5,1,2),trans = "reverse")+theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),panel.grid.major = element_line(size = 0.1, linetype = 'solid',
+                                colour = "black"), 
+  panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                colour = "white"),legend.key.size = unit(1, 'cm'), #change legend key size
+        legend.key.height = unit(0.5, 'cm'), #change legend key height
+        legend.key.width = unit(1, 'cm'), #change legend key width
+        legend.title = element_text(size=6), #change legend title font size
+        legend.text = element_text(size=5),text = element_text(size=15))
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))+scale_size_continuous(breaks = c(0.01,0.05,0.1,0.5,1),limits = c(1,0),trans = "reverse")
+gg
+#ggsave("figure4av2.pdf",plot = gg,height = 7,width = 10)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "blue", low = "red")+theme(text = element_text(size = 20))+scale_size_continuous(trans = "reverse")+guides(size = guide_legend(reverse=TRUE))
+
+gg
+#ggsave("figure3e.pdf",plot = gg,height = 7,width = 13)
+```
+
+
+
+# Figure3f
+* this plot the scm and ecm pathways for ihd-no dm vs donor
+```{r}
+names=read_excel("/Users/MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/Figure 3e and f GO nodes 27.2.23.xlsx",sheet = 2,col_names=TRUE)
+names=as.data.frame(names)
+ggplotdt=figure4b[figure4b$Description%in%as.vector(names[,1]),]
+ggplotdt$pvalue=as.numeric(ggplotdt$pvalue)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(-abs(ggplotdtup$enrichmentScore)),]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$enrichmentScore),]
+
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("ihd-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "blue", low = "red")+theme(text = element_text(size = 20))+scale_size_continuous(trans = "reverse")+guides(size = guide_legend(reverse=TRUE))
+
+gg
+#ggsave("figure3f.pdf",plot = gg,height = 7,width = 13)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue),size=5)+coord_flip()+theme_bw()+ggtitle("ihd-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 20))+scale_color_continuous(limits=c(0,1),breaks=c(0.01,0.05,0.1,0.5,1))
+gg
+#ggsave("figure4bv1.pdf",plot = gg,height = 7,width = 10)
+```
+
+
+# session info
+```{r}
+sessionInfo()
+```

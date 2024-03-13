@@ -1,0 +1,1085 @@
+---
+title: "generate rna seq figures for the paper"
+author: "Yunwei Zhang"
+date: “`r paste0('Initiated on 20220926, compiled on ', format(Sys.time(), '%Y %b %d'))`”
+output:
+  
+  html_document:
+    code_folding: hide
+    fig_height: 8
+    fig_width: 12
+    highlight: tango
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,message = FALSE)
+#usethis::edit_r_environ()
+#R_MAX_VSIZE=700Gb
+```
+
+
+```{r}
+#library(GEOquery)  ## go to https://github.com/seandavi/GEOquery for installation details
+#library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(MultiAssayExperiment)
+library(S4Vectors)
+library(SummarizedExperiment)
+library(DT)
+library(randomForest)
+library(e1071)
+library("bnstruct")
+#library(rminer)
+library(ggpubr)
+setwd("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis")
+# install.packages("VANData_1.0.0.tgz", repos=NULL,type="source")
+# install.packages("VAN_1.0.0.tgz", repos=NULL,type="source") 
+
+library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(gage)
+library(knitr)
+library(DT)
+library(janitor)
+#library(KEGGREST)
+library(MASS)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(dplyr)
+library(reshape)
+library(ggplot2)
+library(plyr)
+library(gtable)
+library(grid)
+library(pheatmap)
+library(reshape2)
+library(plotly)
+library(UpSetR)
+library(MatchIt)
+require(pathview)
+#library(STRINGdb)
+## Kegg sets data
+require(gage)
+require(gageData)
+library(clusterProfiler)
+library(enrichplot)
+kegg = kegg.gsets(species = "hsa", id.type = "kegg")
+kegg.sets.hsa = kegg$kg.sets
+library(ggrepel)
+```
+
+* this file is to runa anlysis and get volcano plots using rna seq data
+* updated 0928 after the meeting with the decision to go with max abundence except GTF2H2
+* updated 1116 for the matched pariwise correlation and with three different groups
+* updated 1205 to output the main figure6 and supp plot
+
+```{r}
+#some notes for pathway analysis
+#'count' is the number of genes that belong to a given gene-set, while 'setSize' is the total number of genes in the gene-set.
+
+#NES = enrichment score normalized to mean enrichment of random samples of the same size,The method employs random sampling of gene sets of the same size as the gene set being tested to assess significance and for normalization. The number of samplings is specified as a parameter.
+
+#
+
+# Let is suppose I have a collection of genesets called : HALLMARK Now let is suppose there is a specific geneset there called: E2F_targets
+# 
+# BgRatio, M/N.
+# 
+# M = size of the geneset (eg size of the E2F_targets); (is the number of genes within that distribution that are annotated (either directly or indirectly) to the node of interest).
+# 
+# N = size of all of the unique genes in the collection of genesets (example the HALLMARK collection); (is the total number of genes in the background distribution (universe)
+# 
+# GeneRatio is k/n.
+# 
+# k = size of the overlap of 'a vector of gene id' you input with the specific geneset (eg E2F_targets), only unique genes; (the number of genes within that list n, which are annotated to the node.
+# 
+# n = size of the overlap of 'a vector of gene id' you input with all the members of the collection of genesets (eg the HALLMARK collection),only unique genes; is the size of the list of genes of interest
+
+#adj pval and qval
+#https://support.bioconductor.org/p/96329/
+#adj pval is the fdr adjusted pval, qval from another package is another adjustment method
+#the BH approach is slightly more conservative than qvalue
+```
+
+
+```{r}
+rnaseq_dt=read_excel("/Users//MQ10004787/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/BH 2022 RNAseq data_3.033 corrected_0s deleted_IHD-DM paper.xlsx",col_names=FALSE)
+
+
+rnaseq_dt=as.data.frame(rnaseq_dt)
+infodt=rnaseq_dt[1:7,]
+expressiondt=rnaseq_dt[8:dim(rnaseq_dt)[1],2:dim(rnaseq_dt)[2]]
+#as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))[which(duplicated(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])))==TRUE)]
+expressiondt=apply(expressiondt, 2, as.numeric)
+abundence=rowSums(expressiondt,na.rm = TRUE)
+duplicated_names=as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))[which(duplicated(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])))==TRUE)]
+name_vec=as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))
+
+subdt=as.data.frame(expressiondt)
+subdt[subdt$name=="GTF2H2",]#need to use the one with a small abundence
+GTF2H2_vec=subdt[7283,1:21]
+subdt$abundence=abundence
+sum(is.na(abundence))
+subdt$name=name_vec
+any(is.na(name_vec))
+dim(subdt)
+subdt2=subdt%>%group_by(name)%>%slice(which.max(abundence))
+dim(subdt2)
+
+#get the expressiondt
+expressiondt=as.data.frame(subdt2[,1:21])
+rownames(expressiondt)=subdt2$name
+expressiondt[rownames(expressiondt)=="GTF2H2",]=GTF2H2_vec
+colnames(expressiondt)=paste(paste(paste(paste(rnaseq_dt[1,2:dim(rnaseq_dt)[2]],rnaseq_dt[2,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[3,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[4,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[5,2:dim(rnaseq_dt)[2]],sep = "_")
+
+#log2 transform
+expressiondt=as.data.frame(apply(expressiondt, 2, log2))
+rownames(expressiondt)=subdt2$name
+dim(expressiondt)
+```
+
+```{r eval=FALSE}
+rnaseq_dt=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/BH 2022 RNAseq data_3.033 corrected_0s deleted_IHD-DM paper.xlsx",col_names=FALSE,sheet = 2)
+
+
+rnaseq_dt=as.data.frame(rnaseq_dt)
+dim(rnaseq_dt)
+rnaseq_dt=rnaseq_dt[,-1]
+dim(rnaseq_dt)
+infodt=rnaseq_dt[1:7,]
+expressiondt=rnaseq_dt[8:dim(rnaseq_dt)[1],2:dim(rnaseq_dt)[2]]
+which(duplicated(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])))==TRUE)
+rownames(expressiondt)=make.names(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])),unique = TRUE)
+colnames(expressiondt)=paste(paste(paste(paste(rnaseq_dt[1,2:dim(rnaseq_dt)[2]],rnaseq_dt[2,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[3,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[4,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[5,2:dim(rnaseq_dt)[2]],sep = "_")
+expressiondt=apply(expressiondt, 2, as.numeric)
+
+#log2 transform
+expressiondt=apply(expressiondt, 2, log2)
+rownames(expressiondt)=make.names(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])),unique = TRUE)
+```
+
+# IHD-DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+
+######################
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_Yes",colnames(expressiondt)),grep("Donor_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+#write.csv(df1,"rna_ihddmvsd.csv")
+    # g1=ggplot2::ggplot(df1, aes(logFC,neglogP_value,label=name))+
+    #   geom_point(size = 1, alpha=1) +
+    #   xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+    #   theme_bw(base_size = 16) +
+    #   geom_hline(yintercept = 1.3, linetype = "dashed", colour = "brown3")+theme(aspect.ratio = 1)
+    
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%dplyr::filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%dplyr::mutate(rn = row_number()) %>% dplyr::filter(adj.P.Val <= 0.05) %>% dplyr::pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+ggplotly(g1)
+for(i in c(2:7,9)){
+  df1[,i]=round(df1[,i],4)
+}
+datatable(df1)
+
+dim(df1[df1$P.Value<0.05,])
+
+g1=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>4|-logFC>4|neglogP_value>4)))
+#ggsave(filename="plot1.pdf",g1,height = 10,width = 8)
+g1
+
+set1=df1[which(df1$P.Value<0.05),"name"]
+set1_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set1_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+rna_dmvsd=df1
+```
+
+
+# IHD-no DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+######################
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_No",colnames(expressiondt)),grep("Donor_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("IHD",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+#write.csv(df1,"rna_ihdnodmvsd.csv")
+    # g1=ggplot2::ggplot(df1, aes(logFC,neglogP_value,label=name))+
+    #   geom_point(size = 1, alpha=1) +
+    #   xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+    #   theme_bw(base_size = 16) +
+    #   geom_hline(yintercept = 1.3, linetype = "dashed", colour = "brown3")+theme(aspect.ratio = 1)
+    
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%dplyr::filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%dplyr::mutate(rn = row_number()) %>% dplyr::filter(adj.P.Val <= 0.05) %>% dplyr::pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-no T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+ggplotly(g1)
+for(i in c(2:7,9)){
+  df1[,i]=round(df1[,i],4)
+}
+datatable(df1)
+
+dim(df1[df1$P.Value<0.05,])
+
+g1=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>2.5|-logFC>2.5|neglogP_value>3.5)))
+#ggsave(filename="plot1.pdf",g1,height = 10,width = 8)
+g1
+
+set2=df1[which(df1$P.Value<0.05),"name"]
+set2_relaxed=df1[which(abs(df1$logFC)>1),"name"]
+set2_restricted=df1[which(df1$adj.P.Val<0.05),"name"]
+
+rna_nodmvsd=df1
+```
+
+```{r}
+library(RColorBrewer)
+myCol <- brewer.pal(3, "Pastel2")[c(1, 2)]
+library(VennDiagram)
+# Chart
+v1=venn.diagram(
+        x = list(set1, set2),
+        category.names = c("IHD-T2DM" , "IHD-NO T2DM" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, ...)
+  grid.draw(venn_object)
+}
+display_venn(x = list(set1, set2),
+              category.names = c("IHD-T2DM" , "IHD-NO T2DM" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+# pdf(file="protein_venn.pdf")
+# grid.draw(v1)
+# dev.off()
+
+```
+
+
+```{r}
+set_protein1=readRDS("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/set1.rds")
+set_protein1_restricted=readRDS("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/set1_restricted.rds")
+# set_protein2=readRDS("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/set4.rds")
+# set_protein2_restricted=readRDS("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/set4_restricted.rds")
+
+
+v1=venn.diagram(
+        x = list(set1, set_protein1_restricted),
+        category.names = c("rna" , "protein" ),
+        cat.cex = 2,
+        cat.default.pos = "text",
+        filename = NULL,
+        output=TRUE,
+        
+        # Output features
+        height = 14 , 
+        width = 15 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = 2,
+        fontface = "bold",
+        fontfamily = "sans"
+        
+    
+)
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, ...)
+  grid.draw(venn_object)
+}
+display_venn(x = list(set1, set_protein1_restricted),
+              category.names = c("rna" , "protein" ),fill = myCol,lwd = 0,
+        lty = 'blank')
+
+# v1=venn.diagram(
+#         x = list(set2,set_protein2_restricted),
+#         category.names = c("rna" , "protein" ),
+#         cat.cex = 2,
+#         cat.default.pos = "text",
+#         filename = NULL,
+#         output=TRUE,
+#         
+#         # Output features
+#         height = 14 , 
+#         width = 15 , 
+#         resolution = 300,
+#         compression = "lzw",
+#         
+#         # Circles
+#         lwd = 2,
+#         lty = 'blank',
+#         fill = myCol,
+#         
+#         # Numbers
+#         cex = 2,
+#         fontface = "bold",
+#         fontfamily = "sans"
+#         
+#     
+# )
+# display_venn <- function(x, ...){
+#   library(VennDiagram)
+#   grid.newpage()
+#   venn_object <- venn.diagram(x, filename = NULL, ...)
+#   grid.draw(venn_object)
+# }
+# display_venn(x = list(set2,set_protein2_restricted),
+#               category.names = c("rna" , "protein" ),fill = myCol,lwd = 0,
+#         lty = 'blank')
+```
+
+# comparison rna-seq vs proteins
+
+* get the protein data
+```{r}
+load("all_omics_lv_v6.RData")
+protein_expression=assay(all_omics@ExperimentList$protein, "log2")
+protein_expression1=as.data.frame(protein_expression)
+
+dim(protein_expression1)
+#changed 20220224: no overall filtering
+protein_expression2=protein_expression1
+dim(protein_expression2)
+dim(protein_expression2[which(rowMeans(!is.na(protein_expression2)) > 0.25), ])
+
+protein_expression3=protein_expression2[,c(union(grep("_IHD_Yes",colnames(protein_expression2)),grep("IHD_No",colnames(protein_expression2))),grep("Donor_No",colnames(protein_expression2)))]
+protein_expression3=protein_expression3[,-c(32,34,36,39,40,41,43,46,48,49,50,54)]
+colnames(protein_expression3)
+```
+
+* get the rna data
+```{r}
+rnaseq_dt=read_excel("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/BH 2022 RNAseq data_3.033 corrected_0s deleted_IHD-DM paper.xlsx",col_names=FALSE)
+
+
+rnaseq_dt=as.data.frame(rnaseq_dt)
+infodt=rnaseq_dt[1:7,]
+expressiondt=rnaseq_dt[8:dim(rnaseq_dt)[1],2:dim(rnaseq_dt)[2]]
+#as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))[which(duplicated(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])))==TRUE)]
+expressiondt=apply(expressiondt, 2, as.numeric)
+abundence=rowSums(expressiondt,na.rm = TRUE)
+duplicated_names=as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))[which(duplicated(as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1])))==TRUE)]
+name_vec=as.character(as.vector(rnaseq_dt[8:dim(rnaseq_dt)[1],1]))
+
+subdt=as.data.frame(expressiondt)
+subdt[subdt$name=="GTF2H2",]#need to use the one with a small abundence
+GTF2H2_vec=subdt[7283,1:21]
+subdt$abundence=abundence
+sum(is.na(abundence))
+subdt$name=name_vec
+any(is.na(name_vec))
+dim(subdt)
+subdt2=subdt%>%group_by(name)%>%slice(which.max(abundence))
+dim(subdt2)
+
+#get the expressiondt
+expressiondt=as.data.frame(subdt2[,1:21])
+rownames(expressiondt)=subdt2$name
+expressiondt[rownames(expressiondt)=="GTF2H2",]=GTF2H2_vec
+colnames(expressiondt)=paste(paste(paste(paste(paste(rnaseq_dt[7,2:dim(rnaseq_dt)[2]],rnaseq_dt[1,2:dim(rnaseq_dt)[2]],sep="_"),rnaseq_dt[2,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[3,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[5,2:dim(rnaseq_dt)[2]],sep = "_"),rnaseq_dt[4,2:dim(rnaseq_dt)[2]],sep = "_")
+#log2 transform
+expressiondt=as.data.frame(apply(expressiondt, 2, log2))
+rownames(expressiondt)=subdt2$name
+dim(expressiondt)
+
+rna_expression=expressiondt
+```
+
+* get all fold changes
+
+```{r}
+expressiondt=rna_expression
+######################
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_Yes",colnames(expressiondt)),grep("IHD_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+#write.csv(df1,"rna_ihddm vs nodm.csv")
+    
+    # g1=ggplot2::ggplot(df1, aes(logFC,neglogP_value,label=name))+
+    #   geom_point(size = 1, alpha=1) +
+    #   xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+    #   theme_bw(base_size = 16) +
+    #   geom_hline(yintercept = 1.3, linetype = "dashed", colour = "brown3")+theme(aspect.ratio = 1)
+    
+    #add fdr plot
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%dplyr::filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%dplyr::mutate(rn = row_number()) %>% dplyr::filter(adj.P.Val <= 0.05) %>% dplyr::pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g1=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+ggplotly(g1)
+for(i in c(2:7,9)){
+  df1[,i]=round(df1[,i],4)
+}
+datatable(df1)
+
+dim(df1[df1$P.Value<0.05,])
+
+g1=ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point() +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("IHD-T2DM vs IHD-NOT2DM") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=logFC,y=neglogP_value,label=name),subset(highlight_df,(logFC>4|-logFC>4|neglogP_value>4)))
+#ggsave(filename="plot1.pdf",g1,height = 10,width = 8)
+g1
+
+rna_dmvsnodm=df1
+```
+
+
+```{r}
+expressiondt=protein_expression3
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_Yes",colnames(expressiondt)),grep("Donor_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+colnames(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    protein_dmvsd=df1
+```
+
+
+```{r}
+expressiondt=protein_expression3
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_No",colnames(expressiondt)),grep("Donor_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+colnames(experiment_data_noimputation)
+
+diabetes=grep("IHD",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    protein_nodmvsd=df1
+```
+
+
+```{r}
+expressiondt=protein_expression3
+experiment_data_noimputation=expressiondt[,union(grep("_IHD_Yes",colnames(expressiondt)),grep("IHD_No",colnames(expressiondt)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+colnames(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+    protein_dmvnodm=df1
+```
+
+* merge the data on genes
+```{r}
+protein_dmvsd=protein_dmvsd[,c(1,2,3,4,5)]
+protein_nodmvsd=protein_nodmvsd[,c(1,2,3,4,5)]
+protein_dmvnodm=protein_dmvnodm[,c(1,2,3,4,5)]
+rna_dmvsd=rna_dmvsd[,c(1,2,3,4,5)]
+rna_dmvsnodm=rna_dmvsnodm[,c(1,2,3,4,5)]
+rna_nodmvsd=rna_nodmvsd[,c(1,2,3,4,5)]
+
+dmvsd=merge(protein_dmvsd,rna_dmvsd,by.x="ID",by.y="ID")
+nodmvsd=merge(protein_nodmvsd,rna_nodmvsd,by.x="ID",by.y="ID")
+dmvsnodm=merge(protein_dmvnodm,rna_dmvsnodm,by.x="ID",by.y="ID")
+
+
+```
+
+* the plot1
+```{r}
+plotdt=dmvsd[dmvsd$AveExpr.y>=5,]
+g1=ggplot(plotdt, aes(x=logFC.x, y=logFC.y)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("IHD-DM VS Donor")+
+  xlab("lfc proteins")+
+  ylab("lfc rna-seq")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_abline(slope = 1,intercept = 0)
+g1
+#ggsave("main_figure6b.pdf",plot=g1)
+plotdt=nodmvsd[nodmvsd$AveExpr.y>=5,]
+g2=ggplot(plotdt, aes(x=logFC.x, y=logFC.y)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("IHD-no DM VS Donor")+
+  xlab("lfc proteins")+
+  ylab("lfc rna-seq")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_abline(slope = 1,intercept = 0)
+g2
+#ggsave("main_figure6a.pdf",plot=g2)
+
+plotdt=dmvsnodm[dmvsnodm$AveExpr.y>=5,]
+g3=ggplot(plotdt, aes(x=logFC.x, y=logFC.y)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("IHD-DM VS IHD-no DM")+
+  xlab("lfc proteins")+
+  ylab("lfc rna-seq")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_abline(slope = 1,intercept = 0)
+g3
+#ggsave("supp_figure_ihdyesno.pdf",plot=g3)
+max(dmvsnodm$AveExpr.y)
+```
+
+* calculate the correlation for each gene
+```{r eval=FALSE}
+protein_expression4=protein_expression3[rownames(protein_expression3)%in%dmvsd$ID,]
+rna_expression2=rna_expression[rownames(rna_expression)%in%dmvsd$ID,]
+dim(protein_expression4)
+dim(rna_expression2)
+
+dim(complete.cases(rna_expression2))
+protein_expression4$ID=rownames(protein_expression4)
+rna_expression2$ID=rownames(rna_expression2)
+
+mergedt=merge(protein_expression4,rna_expression2,by.x="ID",by.y="ID")
+dim(mergedt)
+colnames(mergedt)
+mergedt=mergedt[,c(1,grep(".x",colnames(mergedt)),grep(".y",colnames(mergedt)))]
+colnames(mergedt)
+
+
+for(i in 1:nrow(mergedt)){
+mergedt[i,44]=cor(as.vector(as.numeric(mergedt[i,2:22])),as.vector(as.numeric(mergedt[i,23:43])),use = "complete.obs")
+mergedt[i,45]=cor(as.vector(as.numeric(mergedt[i,2:22])),as.vector(as.numeric(mergedt[i,23:43])),use = "na.or.complete")
+mergedt[i,46]=cor(as.vector(as.numeric(mergedt[i,2:22])),as.vector(as.numeric(mergedt[i,23:43])),use = "pairwise.complete.obs")
+  }
+
+cordt=mergedt[,c(1,44,45,46)]
+
+```
+
+
+* the plot2
+```{r eval=FALSE}
+plotdt=merge(cordt,dmvsd, by.x="ID",by.y="ID")
+
+# ggplot(plotdt, aes(x=V44, y=AveExpr.y)) +
+#   geom_point( mapping = aes(color=AveExpr.y),size=1)+
+#   theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+#         panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+#         panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+#                                         colour = "white"),aspect.ratio = 1)+
+#   ggtitle("Correlation vs average expression")+
+#   xlab("correlation")+
+#   ylab("average in rna")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))
+# 
+# ggplot(plotdt, aes(x=V45, y=AveExpr.y)) +
+#   geom_point( mapping = aes(color=AveExpr.y),size=1)+
+#   theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+#         panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+#         panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+#                                         colour = "white"),aspect.ratio = 1)+
+#   ggtitle("Correlation vs average expression")+
+#   xlab("correlation")+
+#   ylab("average in rna")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))
+
+#Jean wants V46
+ggplot(plotdt, aes(x=AveExpr.y, y=V46)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("Correlation vs average expression")+
+  xlab("average in rna")+
+  ylab("correlation")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))
+
+
+filtereddt=plotdt[plotdt$V46>=0.8,c(1,4,10)]
+filtereddt=filtereddt[-1,]
+colnames(filtereddt)[c(2,3)]=c("correlation","RNA AveExpr")
+filtereddt=na.omit(filtereddt)
+datatable(na.omit(filtereddt))
+```
+
+* 20221019 with TF
+```{r eval=FALSE}
+tf_dt=read.csv("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/DatabaseExtract_v_1.01.csv")
+tf_dt2=tf_dt[tf_dt$Is.TF.=="Yes",]
+#tf_dt3=tf_dt2[tf_dt2$HGNC.symbol%in%filtereddt$ID,]
+tf_dt3=merge(filtereddt,tf_dt2,by.x="ID",by.y="HGNC.symbol")
+datatable(tf_dt3)
+length(unique(tf_dt2$HGNC.symbol))
+filtereddt$ID
+
+```
+
+
+*20221116 cut the values and get three groups for Ben (manual match those samples, pairwise correlation)
+
+## results
+
+```{r}
+protein_expression4=protein_expression3[rownames(protein_expression3)%in%dmvsd$ID,]
+rna_expression2=rna_expression[rownames(rna_expression)%in%dmvsd$ID,]
+dim(protein_expression4)
+dim(rna_expression2)
+
+dim(complete.cases(rna_expression2))
+protein_expression4$ID=rownames(protein_expression4)
+rna_expression2$ID=rownames(rna_expression2)
+
+mergedt=merge(protein_expression4,rna_expression2,by.x="ID",by.y="ID")
+dim(mergedt)
+mergedt=mergedt[,c(1,grep(".x",colnames(mergedt)),grep(".y",colnames(mergedt)))]
+
+colnames(mergedt)
+mergedt_g1=mergedt[,c(1,2,8,4,6,7,5,3,23:29)]
+mergedt_g2=mergedt[,c(1,11,10,15,9,12,13,14,30:36)]
+mergedt_g3=mergedt[,c(1,17,22,18,20,21,19,16,37:43)]
+
+for(i in 1:nrow(mergedt)){
+mergedt[i,44]=cor(as.vector(as.numeric(mergedt[i,c(2,8,4,6,7,5,3,11,10,15,9,12,13,14,17,22,18,20,21,19,16)])),as.vector(as.numeric(mergedt[i,23:43])),use = "pairwise.complete.obs")
+  }
+
+cordt=mergedt[,c(1,44)]
+
+
+plotdt=merge(cordt,dmvsd, by.x="ID",by.y="ID")
+
+plotdt2=plotdt
+plotdt2=plotdt2[plotdt2$AveExpr.y>=5,]
+gg=ggplot(plotdt2, aes(x=AveExpr.y, y=V44)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("Correlation vs average expression")+
+  xlab("average in rna")+
+  ylab("correlation")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_hline(yintercept=0.8)
+gg
+#ggsave("supp_figure_rna.pdf",plot=gg)
+
+filtereddt=plotdt2[plotdt2$V44>=0.8,which(colnames(plotdt2)%in%c("ID","V44","AveExpr.y"))]
+filtereddt=filtereddt[-1,]
+colnames(filtereddt)[c(2,3)]=c("correlation","RNA AveExpr")
+filtereddt=na.omit(filtereddt)
+datatable(na.omit(filtereddt))
+
+
+```
+
+
+```{r}
+tf_dt=read.csv("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis/DatabaseExtract_v_1.01.csv")
+tf_dt2=tf_dt[tf_dt$Is.TF.=="Yes",]
+#tf_dt3=tf_dt2[tf_dt2$HGNC.symbol%in%filtereddt$ID,]
+tf_dt3=merge(filtereddt,tf_dt2,by.x="ID",by.y="HGNC.symbol")
+datatable(tf_dt3)
+length(unique(tf_dt2$HGNC.symbol))
+filtereddt$ID
+
+```
+
+## three groups
+```{r}
+dim(mergedt_g1)
+mergedt_g1$na_sum=rowSums(is.na(mergedt_g1))
+mergedt_g1=mergedt_g1[which(mergedt_g1$na_sum<1),]
+dim(mergedt_g1)
+mergedt_g1=mergedt_g1[,1:15]
+
+colnames(mergedt_g1)
+for(i in 1:nrow(mergedt_g1)){
+mergedt_g1[i,16]=cor(as.vector(as.numeric(mergedt_g1[i,2:8])),as.vector(as.numeric(mergedt_g1[i,9:15])),use = "pairwise.complete.obs")
+}
+
+# nasum_g1=rowSums(is.na(mergedt_g1))
+# which(rownames(rna_expression2)=="ALDH1A3")
+# nasum_g1[146]#high missing values
+
+cordt=mergedt_g1[,c(1,16)]
+
+
+plotdt=merge(cordt,dmvsd, by.x="ID",by.y="ID")
+
+plotdt2=plotdt
+plotdt2=plotdt2[plotdt2$AveExpr.y>=5,]
+ggplot(plotdt2, aes(x=AveExpr.y, y=V16)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("Correlation vs average expression")+
+  xlab("average in rna")+
+  ylab("correlation")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_hline(yintercept=0.8)
+
+filtereddt=plotdt2[plotdt2$V16>=0.8,which(colnames(plotdt2)%in%c("ID","V16","AveExpr.y"))]
+filtereddt=filtereddt[-1,]
+colnames(filtereddt)[c(2,3)]=c("correlation","RNA AveExpr")
+filtereddt=na.omit(filtereddt)
+dim(filtereddt)
+datatable(na.omit(filtereddt))
+
+tf_dt3=merge(filtereddt,tf_dt2,by.x="ID",by.y="HGNC.symbol")
+dim(tf_dt3)
+datatable(tf_dt3)
+length(filtereddt$ID)
+```
+
+
+```{r}
+dim(mergedt_g2)
+mergedt_g2$na_sum=rowSums(is.na(mergedt_g2))
+mergedt_g2=mergedt_g2[which(mergedt_g2$na_sum<1),]
+dim(mergedt_g2)
+mergedt_g2=mergedt_g2[,1:15]
+
+
+colnames(mergedt_g2)
+for(i in 1:nrow(mergedt_g2)){
+mergedt_g2[i,16]=cor(as.vector(as.numeric(mergedt_g2[i,2:8])),as.vector(as.numeric(mergedt_g2[i,9:15])),use = "pairwise.complete.obs")
+  }
+
+cordt=mergedt_g2[,c(1,16)]
+
+
+plotdt=merge(cordt,dmvsd, by.x="ID",by.y="ID")
+
+plotdt2=plotdt
+plotdt2=plotdt2[plotdt2$AveExpr.y>=5,]
+ggplot(plotdt2, aes(x=AveExpr.y, y=V16)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("Correlation vs average expression")+
+  xlab("average in rna")+
+  ylab("correlation")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_hline(yintercept=0.8)
+
+filtereddt=plotdt2[plotdt2$V16>=0.8,which(colnames(plotdt2)%in%c("ID","V16","AveExpr.y"))]
+filtereddt=filtereddt[-1,]
+colnames(filtereddt)[c(2,3)]=c("correlation","RNA AveExpr")
+filtereddt=na.omit(filtereddt)
+dim(filtereddt)
+datatable(na.omit(filtereddt))
+
+tf_dt3=merge(filtereddt,tf_dt2,by.x="ID",by.y="HGNC.symbol")
+dim(tf_dt3)
+datatable(tf_dt3)
+length(filtereddt$ID)
+```
+
+
+```{r}
+dim(mergedt_g3)
+mergedt_g3$na_sum=rowSums(is.na(mergedt_g3))
+mergedt_g3=mergedt_g3[which(mergedt_g3$na_sum<1),]
+dim(mergedt_g3)
+mergedt_g3=mergedt_g3[,1:15]
+
+
+colnames(mergedt_g3)
+for(i in 1:nrow(mergedt_g3)){
+mergedt_g3[i,16]=cor(as.vector(as.numeric(mergedt_g3[i,2:8])),as.vector(as.numeric(mergedt_g3[i,9:15])),use = "pairwise.complete.obs")
+  }
+
+cordt=mergedt_g3[,c(1,16)]
+
+
+plotdt=merge(cordt,dmvsd, by.x="ID",by.y="ID")
+
+plotdt2=plotdt
+plotdt2=plotdt2[plotdt2$AveExpr.y>=5,]
+ggplot(plotdt2, aes(x=AveExpr.y, y=V16)) +
+  geom_point( mapping = aes(color=AveExpr.y),size=1)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),panel.background =element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.1, linetype = 'solid',colour = "gray"),
+        panel.grid.minor = element_line(size = 0.1, linetype = 'solid',
+                                        colour = "white"),aspect.ratio = 1)+
+  ggtitle("Correlation vs average expression")+
+  xlab("average in rna")+
+  ylab("correlation")+scale_colour_gradientn(colours=rev(c("#FF0000", "#FFFF00" ,"#00FF00", "#00FFFF","#0000FF")))+geom_hline(yintercept=0.8)
+
+filtereddt=plotdt2[plotdt2$V16>=0.8,which(colnames(plotdt2)%in%c("ID","V16","AveExpr.y"))]
+filtereddt=filtereddt[-1,]
+colnames(filtereddt)[c(2,3)]=c("correlation","RNA AveExpr")
+filtereddt=na.omit(filtereddt)
+dim(filtereddt)
+datatable(na.omit(filtereddt))
+
+tf_dt3=merge(filtereddt,tf_dt2,by.x="ID",by.y="HGNC.symbol")
+dim(tf_dt3)
+datatable(tf_dt3)
+length(filtereddt$ID)
+```
+
+
+
