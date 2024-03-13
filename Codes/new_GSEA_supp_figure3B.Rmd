@@ -1,0 +1,391 @@
+---
+title: "new GSEA analysis for supp figure S5 metabolites part"
+author: "Yunwei Zhang"
+date: “`r paste0('Initiated on 20220916, compiled on ', format(Sys.time(), '%Y %b %d'))`”
+output:
+  
+  html_document:
+    code_folding: hide
+    fig_height: 8
+    fig_width: 12
+    highlight: tango
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE,message = FALSE)
+#usethis::edit_r_environ()
+#R_MAX_VSIZE=700Gb
+```
+
+* this file has been update 20220926 with the >=21 donors for DCM comparison.
+
+
+```{r}
+#library(GEOquery)  ## go to https://github.com/seandavi/GEOquery for installation details
+#library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+#library(DMwR)
+library(readxl)
+library(MultiAssayExperiment)
+library(S4Vectors)
+library(SummarizedExperiment)
+library(DT)
+library(randomForest)
+library(e1071)
+library("bnstruct")
+library(rminer)
+library(ggpubr)
+setwd("~/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/clean_up_folder/analysis")
+# install.packages("VANData_1.0.0.tgz", repos=NULL,type="source")
+# install.packages("VAN_1.0.0.tgz", repos=NULL,type="source") 
+
+library(R.utils)
+library(reshape2)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(tidyverse)
+library(DMwR)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(gage)
+library(knitr)
+library(DT)
+library(janitor)
+library(KEGGREST)
+library(MASS)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(dplyr)
+library(reshape)
+library(ggplot2)
+library(plyr)
+library(gtable)
+library(grid)
+library(pheatmap)
+library(reshape2)
+library(plotly)
+library(UpSetR)
+library(MatchIt)
+require(pathview)
+library(STRINGdb)
+## Kegg sets data
+require(gage)
+require(gageData)
+# kegg = kegg.gsets(species = "hsa", id.type = "kegg")
+# kegg.sets.hsa = kegg$kg.sets
+
+# go.hs=go.gsets(species="human")
+# go.bp=go.hs$go.sets[go.hs$go.subs$BP]
+# go.mf=go.hs$go.sets[go.hs$go.subs$MF]
+# go.bpmf=go.hs$go.sets[go.hs$go.subs$BP&go.hs$go.subs$MF] #not equal, wired
+# go.bpmf2=append(go.bp,go.mf)
+require(gage)
+require(gageData)
+library(clusterProfiler)
+library(enrichplot)
+```
+
+
+# DCM-DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+## DE analysis and standard pipeline
+```{r}
+adj_to_p <- function(df) {
+  #df <- topTable(fit, coef = comparison, number = nrow(fit))
+  if ((df %>%filter(adj.P.Val < 0.05) %>% nrow()) == 0){
+    r <- 1
+  } else {
+    r <- df%>%mutate(rn = row_number()) %>% filter(adj.P.Val <= 0.05) %>% pull(rn)%>%max() + 1
+  }
+  n <- nrow(df) + 1
+  lp10 <- -log10(r / n * 0.05)
+  lp10
+} 
+
+
+load("all_omics_lv_v5.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="Yes",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)#need to change to numeric here
+ihddt=infodt1[infodt1$ihd!=2,]
+dim(ihddt)
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=metabolite_expression1[,union(grep("_DCM_Yes",colnames(metabolite_expression1)),grep("Donor_No",colnames(metabolite_expression1)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("Yes",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g2=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+
+  #ggsave(filename="plot2.pdf",g2)
+  ggplotly(g2)
+  datatable(df1%>% mutate_if(is.numeric, ~round(., 3)))
+  
+  
+      #pathway analysis: name mapping to change the metabolites names
+nameref=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/BH 2020 scMerge_impute AMIDE and HILIC 14.12.21_Normalised.xlsx",sheet = 4)
+sum(rownames(df1) %in% nameref$Metabolite)
+
+df1_new=df1[which(rownames(df1) %in% nameref$Metabolite),]
+df1_new$name=rownames(df1_new)
+df1_new$name[as.numeric(na.omit(match(nameref$Metabolite,df1_new$name,nomatch = NA)))] <- nameref$`KEGG ID`[as.numeric(na.omit(match(df1_new$name,nameref$Metabolite,nomatch = NA)))]
+dim(df1_new)
+df2=df1_new[!is.na(df1_new$name),] #not matching are noted as "-" so that i didnt delete anything
+dim(df2)
+fc=df2$logFC
+names(fc)=df2$name
+fc=sort(fc,decreasing = TRUE)
+
+#name mapping for pathways
+meta_pathway_name=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/2020 Human Heart Metabolomic functionally annotated metabolites.xlsx")
+meta_pathway_name=meta_pathway_name[,c("KEGG pathway","KEGG")]
+
+length(unique(meta_pathway_name$`KEGG pathway`))
+length(unique(meta_pathway_name$KEGG))
+
+library(clusterProfiler)
+
+kk2<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,nPerm = 1000, minGSSize = 3,maxGSSize = 500,pAdjustMethod = "none")
+datatable(as.data.frame(kk2)%>% mutate_if(is.numeric, ~round(., 3)))
+
+
+ggplotdt=as.data.frame(kk2)
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(ggplotdtup$p.adjust),]
+ggplotdtupsub=ggplotdtupsub[1:10,]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$p.adjust),]
+ggplotdtdownsub=ggplotdtdownsub[1:10,]
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("DCM-dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 10))
+
+gg
+
+
+ihddm_dt2=as.data.frame(kk2)
+
+```
+
+
+
+# DCM-NO DM VS Donor {.tabset .tabset-fade .tabset-pills}
+
+## DE analysis and standard pipeline
+
+```{r}
+load("all_omics_lv_v5.RData")
+metabolite_expression=assay(all_omics@ExperimentList$metabolite, "log2_norm")
+metabolite_expression1=as.data.frame(metabolite_expression)
+metabolite_expression1=apply(metabolite_expression,2,as.numeric)
+rownames(metabolite_expression1)=rownames(metabolite_expression)
+dim(metabolite_expression1)
+
+#20220321 add the age match as before
+infodt1 = colData(all_omics)
+infodt1$ihd=as.numeric(as.vector(ifelse(infodt1$Condition=="DCM"&infodt1$Diabetes=="No",1,ifelse(infodt1$Condition=="Donor",0,2))))
+infodt1$Age=as.numeric(infodt1$Age)#need to change to numeric here
+ihddt=infodt1[infodt1$ihd!=2,]
+dim(ihddt)
+ihddt=ihddt[(ihddt$ihd==0&ihddt$Age>=21)|ihddt$ihd==1,]
+dim(ihddt)
+ihddt$new_filename
+indexx=ihddt$new_filename
+metabolite_expression1=metabolite_expression1[,colnames(metabolite_expression1)%in%indexx]
+dim(metabolite_expression1)
+
+#get the "lv" "ihd-dm" "ihd-no dm" non-imputed data
+experiment_data_noimputation=metabolite_expression1[,union(grep("_DCM_No",colnames(metabolite_expression1)),grep("Donor_No",colnames(metabolite_expression1)))]
+#colnames(experiment_data_noimputation)
+dim(experiment_data_noimputation)
+#filtering out proteins with >25% samples missing
+experiment_data_noimputation=experiment_data_noimputation[which(rowMeans(!is.na(experiment_data_noimputation)) > 0.25), ]
+dim(experiment_data_noimputation)
+
+diabetes=grep("DCM",colnames(experiment_data_noimputation))
+experiment_data_noimputation1=as.data.frame(t(experiment_data_noimputation))
+rownames(experiment_data_noimputation1)=1:dim(experiment_data_noimputation1)[1]
+experiment_data_noimputation1$y=ifelse(rownames(experiment_data_noimputation1) %in% diabetes,1,0)
+
+
+#de analysis-- should be on the non-imputed data
+
+    
+    groupname<-as.factor(experiment_data_noimputation1$y)
+    design <- model.matrix(~ groupname + 0)
+    fit <- lmFit(experiment_data_noimputation, design)
+    cont.matrix <- makeContrasts(groupname1-groupname0, levels=design)
+    fit2 <- contrasts.fit(fit, cont.matrix)
+    fit2 <- eBayes(fit2)
+    tT <- topTable(fit2)
+    df1 <- topTable(fit2, number=nrow(fit2), genelist=rownames(experiment_data_noimputation))
+    df1$name=rownames(df1)
+    df1$neglogP_value = -log10(df1$P.Value)
+ 
+#add samples
+colnames(experiment_data_noimputation)
+#add fdr plot
+adj_to_p(df1)
+highlight_df=df1
+highlight_df$colorcode=as.character(ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC>0,1,ifelse(highlight_df$neglogP_value>adj_to_p(df1)&highlight_df$logFC<0,-1,0)))
+dim(highlight_df)
+highlight_df=na.omit(highlight_df)
+dim(highlight_df)
+g5=ggplot2::ggplot(highlight_df, aes(logFC,neglogP_value,label=name))+
+      geom_point(aes(x=logFC,y=neglogP_value,color=colorcode)) +
+      xlab("log2 fold change") + ylab("-log10 p-value")+ggtitle("DCM-T2DM vs Donor") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1) +
+      geom_hline(yintercept = adj_to_p(df1), linetype = "dashed", colour = "red")+scale_color_manual(values = c("blue","gray","red"))
+
+
+  #ggsave(filename="plot5.pdf",g5)
+  ggplotly(g5)
+  datatable(df1%>% mutate_if(is.numeric, ~round(., 3)))
+  
+        #pathway analysis: name mapping to change the metabolites names
+nameref=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/BH 2020 scMerge_impute AMIDE and HILIC 14.12.21_Normalised.xlsx",sheet = 4)
+
+
+df1_new=df1[which(rownames(df1) %in% nameref$Metabolite),]
+df1_new$name=rownames(df1_new)
+df1_new$name[as.numeric(na.omit(match(nameref$Metabolite,df1_new$name,nomatch = NA)))] <- nameref$`KEGG ID`[as.numeric(na.omit(match(df1_new$name,nameref$Metabolite,nomatch = NA)))]
+dim(df1_new)
+df2=df1_new[!is.na(df1_new$name),]
+dim(df2)
+fc=df2$logFC
+names(fc)=df2$name
+fc=sort(fc,decreasing = TRUE)
+
+#name mapping for pathways
+meta_pathway_name=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/2020 Human Heart Metabolomic functionally annotated metabolites.xlsx")
+meta_pathway_name=meta_pathway_name[,c("KEGG pathway","KEGG")]
+
+length(unique(meta_pathway_name$`KEGG pathway`))
+length(unique(meta_pathway_name$KEGG))
+
+
+library(clusterProfiler)
+
+kk2<-GSEA(fc, TERM2GENE=meta_pathway_name,pvalueCutoff = 1,seed = 12,nPerm = 1000, minGSSize = 3,maxGSSize = 500,pAdjustMethod = "none")
+datatable(as.data.frame(kk2)%>% mutate_if(is.numeric, ~round(., 3)))
+
+ggplotdt=as.data.frame(kk2)
+ggplotdt$p.adjust=as.numeric(ggplotdt$p.adjust)
+ggplotdtup=ggplotdt[ggplotdt$enrichmentScore>0,]
+ggplotdtupsub=ggplotdtup[order(ggplotdtup$p.adjust),]
+ggplotdtupsub=ggplotdtupsub[1:10,]
+ggplotdtdown=ggplotdt[ggplotdt$enrichmentScore<0,]
+ggplotdtdownsub=ggplotdtdown[order(ggplotdtdown$p.adjust),]
+ggplotdtdownsub=ggplotdtdownsub[1:10,]
+ggplotdt=rbind.data.frame(ggplotdtupsub,ggplotdtdownsub)
+
+gg=ggplot(ggplotdt,aes(x = reorder(Description, enrichmentScore),y=enrichmentScore))+geom_point(aes(color=pvalue,size=pvalue))+coord_flip()+theme_bw()+ggtitle("DCM-no dm vs donor pathway enrichment analysis")+
+  scale_colour_gradient(high = "red", low = "blue")+theme(text = element_text(size = 10))
+
+gg
+
+
+ihdnodm_dt2=as.data.frame(kk2)
+
+```
+
+# Figure3B
+
+
+```{r}
+dim(ihddm_dt2)
+dim(ihdnodm_dt2)
+common_name=c(ihddm_dt2$Description,ihdnodm_dt2$Description)
+plotmerge=merge(ihddm_dt2,ihdnodm_dt2,by="Description")
+plotmerge$pvalue.x=-log10(as.numeric(plotmerge$pvalue.x))
+plotmerge$pvalue.y=-log10(as.numeric(plotmerge$pvalue.y))
+# annotation=read_excel("/Users/yzha0247/Dropbox (Sydney Uni)/Diabetic cardiomyopathy/YUNWEI USE THIS/Yunwei202110/IHD-DM paper figure 3a pathways to annotate.xlsx")
+# plotmerge$mito=as.character(ifelse(plotmerge$Description%in% ben_mito$Description,1,0))
+# plotmerge$annotation=as.character(ifelse(plotmerge$Description%in% annotation$`Amino acid metabolism`,1,0))
+# ggplotly(ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description,color=mito))+geom_point()+ggtitle("kegg+mito pathways ihd-dm vs ihd-no dm")+xlab("neg_log10_pval in ind-dm vs donor")+ylab("neg_log10_pval in ind-no dm vs donor")+theme_bw())
+
+library(ggrepel)
+gg=ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description))+geom_point()+ggtitle("kegg+mito pathways DCM-dm vs DCM-no dm")+xlab("neg_log10_pval in DCM-dm vs donor")+ylab("neg_log10_pval in DCM-no dm vs donor")+theme_bw()+theme(aspect.ratio = 1)
+#gg=ggplot(plotmerge,aes(pvalue.x,pvalue.y,label=Description,color=mito))+geom_point()+ geom_text_repel(aes(x=pvalue.x,y=pvalue.y,label=Description),subset(plotmerge,plotmerge$annotation==1), size=3)+ggtitle("kegg+mito pathways ihd-dm vs ihd-no dm")+xlab("neg_log10_pval in ind-dm vs donor")+ylab("neg_log10_pval in ind-no dm vs donor")+ scale_color_manual(values=c("black", "seagreen"))+theme_bw()+theme(aspect.ratio = 1)
+ggplotly(gg)
+
+g1=ggplot(plotmerge, aes(pvalue.x,pvalue.y,label=Description))+
+      geom_point() +
+      xlab("neg_log10_pval in DCM-dm vs donor") + ylab("neg_log10_pval in DCM-no dm vs donor")+ggtitle("Pathways DCM-dm vs DCM-no dm") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"),aspect.ratio = 1)+geom_text_repel(aes(x=pvalue.x,y=pvalue.y,label=Description),subset(plotmerge,(pvalue.x>1|pvalue.y>1)))
+g1
+#ggsave(filename="s5b.pdf",g1,height = 10,width = 10)
+```
+
+
